@@ -2,13 +2,6 @@
 #include <BleKeyboard.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
-#ifdef USE_SH1107
-  #include <Adafruit_SH110X.h>
-#elif defined(USE_SH1106)
-  #include <Adafruit_SH110X.h>
-#else
-  #include <Adafruit_SSD1306.h>
-#endif
 #include <Bounce2.h>
 #include <Preferences.h>
 #include "RoboEyes.h"
@@ -17,22 +10,39 @@
 
 // === Display driver abstraction (compile-time selection) ===
 // One of: SSD1306 (default), SH1106G (USE_SH1106), SH1107 (USE_SH1107).
-// SH1106G and SH1107 share the Adafruit SH110X library API; SSD1306 differs.
-#if defined(USE_SH1106) || defined(USE_SH1107)
+#ifdef USE_SH1107
+  // SH1107 panels are commonly 64x128 (portrait). The UI is drawn for a 128x64
+  // logical landscape, so build the driver for the portrait panel and rotate
+  // 90 deg clockwise (Adafruit rotation 1) to map the landscape UI onto it —
+  // the same convention the Adafruit SH110X library uses for its 64x128
+  // FeatherWing. If your panel is 128x64 landscape instead, drop the rotation
+  // and the (64,128) size below.
+  #include <Adafruit_SH110X.h>
   #define DISPLAY_WHITE     SH110X_WHITE
   #define DISPLAY_BLACK     SH110X_BLACK
   #define DISPLAY_INVERSE   SH110X_INVERSE
   #define SET_BRIGHTNESS(v) display.setContrast(v)
   #define DISPLAY_BEGIN()   display.begin(SCREEN_ADDRESS)
+  #define DISPLAY_ROTATION  1
+  #define ALLOC_FAILED_MSG  "OLED allocation failed"
+#elif defined(USE_SH1106)
+  #include <Adafruit_SH110X.h>
+  #define DISPLAY_WHITE     SH110X_WHITE
+  #define DISPLAY_BLACK     SH110X_BLACK
+  #define DISPLAY_INVERSE   SH110X_INVERSE
+  #define SET_BRIGHTNESS(v) display.setContrast(v)
+  #define DISPLAY_BEGIN()   display.begin(SCREEN_ADDRESS)
+  #define DISPLAY_ROTATION  0
   #define ALLOC_FAILED_MSG  "OLED allocation failed"
 #else
-  typedef Adafruit_SSD1306 DisplayDriver;
+  #include <Adafruit_SSD1306.h>
   #define DISPLAY_WHITE     SSD1306_WHITE
   #define DISPLAY_BLACK     SSD1306_BLACK
   #define DISPLAY_INVERSE   SSD1306_INVERSE
   #define SET_BRIGHTNESS(v) do { display.ssd1306_command(SSD1306_SETCONTRAST); \
                                        display.ssd1306_command(v); } while(0)
   #define DISPLAY_BEGIN()   display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)
+  #define DISPLAY_ROTATION  0
   #define ALLOC_FAILED_MSG  "SSD1306 allocation failed"
 #endif
 
@@ -46,7 +56,7 @@ WiFiUDP udp;
 #define SCREEN_ADDRESS 0x3C
 
 #ifdef USE_SH1107
-  Adafruit_SH1107 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+  Adafruit_SH1107 display(64, 128, &Wire, OLED_RESET); // 64x128 portrait panel
   RoboEyes<Adafruit_SH1107> eyes(display);
 #elif defined(USE_SH1106)
   Adafruit_SH1106G display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
@@ -770,6 +780,7 @@ void setup() {
   if(!DISPLAY_BEGIN()) {
     Serial.println(F(ALLOC_FAILED_MSG));
   }
+  display.setRotation(DISPLAY_ROTATION);
 
   SET_BRIGHTNESS(brightness);
   display.clearDisplay();
