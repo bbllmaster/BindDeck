@@ -46,6 +46,7 @@ const i18n = {
         anim_1: "Flash Notification",
         anim_2: "Minimal Text",
         anim_3: "Waves + Mic Mute",
+        anim_4: "Custom Image (.h)",
         anim_default: "Default (from Device Settings)",
         oled_brightness: "OLED Brightness",
         enc_action: "Encoder Action",
@@ -110,6 +111,8 @@ const i18n = {
         close_cancel: "Cancel",
         test_mode: "Test Mode",
         footer_developed_by: "Developed by",
+        panel_subtitle: "Configuring Switch ",
+        sw_legend: "(SW = Switch)",
         new_version: "New firmware version available:",
         update_now: "Update now",
         new_app_version: "New BindDeck app version available:",
@@ -126,6 +129,7 @@ const i18n = {
         anim_1: "Notificación Flash",
         anim_2: "Texto Minimalista",
         anim_3: "Ondas + Micrófono Mute",
+        anim_4: "Imagen Personalizada (.h)",
         anim_default: "Por defecto (Ajustes)",
         oled_brightness: "Brillo OLED",
         enc_action: "Acción del Encoder",
@@ -190,10 +194,95 @@ const i18n = {
         close_cancel: "Cancelar",
         test_mode: "Modo Prueba",
         footer_developed_by: "Desarrollado por",
+        panel_subtitle: "Configuración Switch ",
+        sw_legend: "(SW = Interruptor)",
         new_version: "Nueva versión de firmware disponible:",
         update_now: "Actualizar ahora",
         new_app_version: "Nueva versión de la app BindDeck disponible:",
         app_update_now: "Actualizar y reiniciar"
+    },
+    zh: {
+        app_title: "BindDeck",
+        app_subtitle: "控制中心",
+        device_connected: "设备已连接",
+        device_disconnected: "未连接",
+        device_settings: "设备设置",
+        oled_anim: "OLED 动画",
+        anim_0: "扩展波纹",
+        anim_1: "闪烁通知",
+        anim_2: "极简文字",
+        anim_3: "波纹 + 静音麦克风",
+        anim_4: "自定义图片 (.h)",
+        anim_default: "默认（设备设置）",
+        oled_brightness: "OLED 亮度",
+        enc_action: "编码器动作",
+        enc_0: "系统音量",
+        enc_1: "缩放（放大/缩小）",
+        enc_2: "浏览器标签（上一个/下一个）",
+        enc_3: "撤销 / 重做",
+        sync: "同步到设备",
+        sync_tooltip: "立即将当前配置和颜色发送到设备。",
+        control_deck: "BindDeck",
+        select_key_hint: "选择一个按键来配置其动作。",
+        action: "动作",
+        select_key_first: "请先选择一个按键",
+        press: "按下",
+        hold: "长按",
+        action_type: "动作类型",
+        action_none: "原生键盘（F13-F20）",
+        action_app: "运行程序或文件",
+        action_shortcut: "复杂键盘快捷键",
+        action_text: "自动输入文本",
+        anim_on_press: "按下时动画",
+        value: "动作配置",
+        value_hint: "程序：路径或名称（如 calc.exe）。快捷键：用 + 连接（如 CTRL+SHIFT+C）。",
+        custom_text: "屏幕自定义文字",
+        custom_text_hint: "可选。按下按键时显示的简短文字。",
+        save_action: "保存",
+        delete_action: "删除",
+        hw_leds: "我的设备有 LED",
+        global_color: "全局颜色",
+        led_effect: "LED 效果",
+        led_solid: "固定颜色",
+        led_breath: "呼吸",
+        led_rainbow: "彩虹",
+        led_wave: "按下时波浪",
+        settings_title: "应用设置",
+        theme: "主题",
+        theme_system: "跟随系统",
+        dark: "深色",
+        light: "浅色",
+        language: "语言",
+        startup: "随 Windows 启动",
+        updates: "更新",
+        check_updates: "检查更新",
+        close: "关闭",
+        save: "保存",
+        about_title: "关于 / Acerca de",
+        about_tab1: "关于应用",
+        about_desc1: "<strong>BindDeck Companion for ESP32</strong><br>版本: 1.0.0<br>以热情为 Maker 社区开发。<br><br>此软件支持与基于 ESP32 的 BindDeck 设备进行通信、配置文件分配和宏操作。",
+        about_tab2: "隐私与透明度",
+        about_desc2: "<li style='margin-bottom: 0.5rem;'>此应用程序完全在您的本机上运行。</li><li style='margin-bottom: 0.5rem;'>它不会收集、存储或向外部服务器传输按键、密码、遥测或个人数据。</li><li style='margin-bottom: 0.5rem;'>通信仅限于您的计算机与已连接的 ESP32 设备之间的本地连接（USB/串口/蓝牙）。</li>",
+        about_tab3: "条款与支持",
+        about_desc3: "<strong>免责声明：</strong><br>本软件按\"原样\"提供，不保证无中断运行或与所有硬件环境的兼容性。开发者不承担硬件配置错误或损害的责任。<br><br><strong>支持与捐赠：</strong><br>本应用完全免费。如果您希望支持项目的维护，可以自愿通过<strong>主页面底部的赞助图标</strong>进行捐赠。捐赠是感激的象征性表示，不构成购买协议或保证的技术支持。",
+        close_action: "点击 X 时",
+        close_ask: "每次都问我",
+        close_minimize: "最小化到系统托盘",
+        close_quit: "退出应用",
+        close_title: "关闭 BindDeck？",
+        close_desc: "您想将应用最小化到系统托盘以让宏继续运行，还是完全退出？",
+        close_remember: "记住我的选择",
+        close_minimize_btn: "最小化到托盘",
+        close_quit_btn: "完全退出",
+        close_cancel: "取消",
+        test_mode: "测试模式",
+        footer_developed_by: "由 开发",
+        panel_subtitle: "配置按键 ",
+        sw_legend: "(SW = 开关)",
+        new_version: "新固件版本可用：",
+        update_now: "立即更新",
+        new_app_version: "新 BindDeck 应用版本可用：",
+        app_update_now: "更新并重启"
     }
 };
 
@@ -306,6 +395,7 @@ async function fetchConfig() {
             const ver = verData.version;
             i18n.en.about_desc1 = i18n.en.about_desc1.replace(/1\.0\.0/g, ver);
             i18n.es.about_desc1 = i18n.es.about_desc1.replace(/1\.0\.0/g, ver);
+            i18n.zh.about_desc1 = i18n.zh.about_desc1.replace(/1\.0\.0/g, ver);
             const elVer = document.getElementById('current-version-text');
             if (elVer) elVer.innerText = ver;
         } catch(e) {}
@@ -501,7 +591,7 @@ document.querySelectorAll('.keycap').forEach(btn => {
         
         const swNumber = btn.innerText.includes('SW') ? btn.innerText.split(' ')[1] : 'Encoder';
         const lang = document.getElementById('appLang').value || 'en';
-        const prefix = (lang === 'es') ? 'Configuración Switch ' : 'Configuring Switch ';
+        const prefix = (i18n[lang] && i18n[lang].panel_subtitle) ? i18n[lang].panel_subtitle : 'Configuring Switch ';
         document.getElementById('panel-subtitle').innerText = `${prefix}${swNumber} (F${currentKey})`;
         
         document.getElementById('actionType').value = keyConfig.type;
