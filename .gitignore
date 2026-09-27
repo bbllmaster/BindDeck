@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 *.log
 macro_config.json
+# 合并固件（bootloader+分区表+app，构建产物，勿提交）
+merged_firmware*.bin

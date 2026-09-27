@@ -2,12 +2,39 @@
 #include <BleKeyboard.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+#ifdef USE_SH1107
+  #include <Adafruit_SH110X.h>
+#elif defined(USE_SH1106)
+  #include <Adafruit_SH110X.h>
+#else
+  #include <Adafruit_SSD1306.h>
+#endif
 #include <Bounce2.h>
 #include <Preferences.h>
 #include "RoboEyes.h"
 #include <WiFi.h>
 #include <WiFiUdp.h>
+
+// === Display driver abstraction (compile-time selection) ===
+// One of: SSD1306 (default), SH1106G (USE_SH1106), SH1107 (USE_SH1107).
+// SH1106G and SH1107 share the Adafruit SH110X library API; SSD1306 differs.
+#if defined(USE_SH1106) || defined(USE_SH1107)
+  #define DISPLAY_WHITE     SH110X_WHITE
+  #define DISPLAY_BLACK     SH110X_BLACK
+  #define DISPLAY_INVERSE   SH110X_INVERSE
+  #define SET_BRIGHTNESS(v) display.setContrast(v)
+  #define DISPLAY_BEGIN()   display.begin(SCREEN_ADDRESS)
+  #define ALLOC_FAILED_MSG  "OLED allocation failed"
+#else
+  typedef Adafruit_SSD1306 DisplayDriver;
+  #define DISPLAY_WHITE     SSD1306_WHITE
+  #define DISPLAY_BLACK     SSD1306_BLACK
+  #define DISPLAY_INVERSE   SSD1306_INVERSE
+  #define SET_BRIGHTNESS(v) do { display.ssd1306_command(SSD1306_SETCONTRAST); \
+                                       display.ssd1306_command(v); } while(0)
+  #define DISPLAY_BEGIN()   display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)
+  #define ALLOC_FAILED_MSG  "SSD1306 allocation failed"
+#endif
 
 const char* WIFI_SSID = "AIRCONECT_FIBRA-5865_5G";
 const char* WIFI_PASSWORD = "ZnP8A6F53bMV[{I,";
@@ -18,8 +45,16 @@ WiFiUDP udp;
 #define OLED_RESET    -1
 #define SCREEN_ADDRESS 0x3C
 
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
-RoboEyes<Adafruit_SSD1306> eyes(display);
+#ifdef USE_SH1107
+  Adafruit_SH1107 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+  RoboEyes<Adafruit_SH1107> eyes(display);
+#elif defined(USE_SH1106)
+  Adafruit_SH1106G display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+  RoboEyes<Adafruit_SH1106G> eyes(display);
+#else
+  Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+  RoboEyes<Adafruit_SSD1306> eyes(display);
+#endif
 BleKeyboard bleKeyboard("BindDeck", "Custom", 100);
 Preferences preferences;
 
@@ -99,7 +134,7 @@ void drawTimeScreen() {
   if (!getLocalTime(&timeinfo, 50)) {
     display.setCursor(20, 25);
     display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
+    display.setTextColor(DISPLAY_WHITE);
     display.print("Waiting for Time...");
     display.display();
     return;
@@ -109,7 +144,7 @@ void drawTimeScreen() {
   strftime(timeStringBuff, sizeof(timeStringBuff), "%H:%M", &timeinfo);
   
   display.setTextSize(3);
-  display.setTextColor(SSD1306_WHITE);
+  display.setTextColor(DISPLAY_WHITE);
   
   // Center time
   int16_t x1, y1;
@@ -175,8 +210,7 @@ void processCommand(String data) {
       saveConfig();
     } else if (data.startsWith("CFG:BRIGHT:")) {
       brightness = data.substring(11).toInt();
-      display.ssd1306_command(SSD1306_SETCONTRAST);
-      display.ssd1306_command(brightness);
+      SET_BRIGHTNESS(brightness);
       saveConfig();
     } else if (data.startsWith("CFG:KB_ANIM:")) {
       String payload = data.substring(12);
@@ -338,38 +372,38 @@ void drawBatteryIcon(int x, int y, int percentage, bool isCharging) {
   int iconX = x + 25; // 4 chars * 6px = 24px + 1px gap
   
   // Draw battery outline
-  display.drawRect(iconX, y, 20, 10, SSD1306_WHITE);
-  display.fillRect(iconX + 20, y + 2, 2, 6, SSD1306_WHITE); // Battery tip
+  display.drawRect(iconX, y, 20, 10, DISPLAY_WHITE);
+  display.fillRect(iconX + 20, y + 2, 2, 6, DISPLAY_WHITE); // Battery tip
   
   // Draw fill
   int fillWidth = map(percentage, 0, 100, 0, 16);
   if (fillWidth > 0) {
-    display.fillRect(iconX + 2, y + 2, fillWidth, 6, SSD1306_WHITE);
+    display.fillRect(iconX + 2, y + 2, fillWidth, 6, DISPLAY_WHITE);
   }
   
   if (isCharging) {
     // Draw a lightning bolt in the center. We use INVERSE so it looks white on black background, or black on the fill bar.
     int lx = iconX + 8;
     int ly = y + 1;
-    display.drawLine(lx + 3, ly + 1, lx + 1, ly + 4, SSD1306_INVERSE);
-    display.drawLine(lx + 1, ly + 4, lx + 4, ly + 4, SSD1306_INVERSE);
-    display.drawLine(lx + 4, ly + 4, lx + 2, ly + 7, SSD1306_INVERSE);
+    display.drawLine(lx + 3, ly + 1, lx + 1, ly + 4, DISPLAY_INVERSE);
+    display.drawLine(lx + 1, ly + 4, lx + 4, ly + 4, DISPLAY_INVERSE);
+    display.drawLine(lx + 4, ly + 4, lx + 2, ly + 7, DISPLAY_INVERSE);
   }
 }
 
 void drawWiFiIcon(int x, int y) {
   // Simple Wi-Fi waves
-  display.drawPixel(x+4, y+6, SSD1306_WHITE);
-  display.drawLine(x+2, y+4, x+6, y+4, SSD1306_WHITE);
-  display.drawLine(x, y+2, x+8, y+2, SSD1306_WHITE);
+  display.drawPixel(x+4, y+6, DISPLAY_WHITE);
+  display.drawLine(x+2, y+4, x+6, y+4, DISPLAY_WHITE);
+  display.drawLine(x, y+2, x+8, y+2, DISPLAY_WHITE);
 }
 
 void drawBTIcon(int x, int y) {
-  display.drawLine(x+3, y, x+3, y+8, SSD1306_WHITE);
-  display.drawLine(x+3, y, x+5, y+2, SSD1306_WHITE);
-  display.drawLine(x+5, y+2, x+1, y+6, SSD1306_WHITE);
-  display.drawLine(x+3, y+8, x+5, y+6, SSD1306_WHITE);
-  display.drawLine(x+5, y+6, x+1, y+2, SSD1306_WHITE);
+  display.drawLine(x+3, y, x+3, y+8, DISPLAY_WHITE);
+  display.drawLine(x+3, y, x+5, y+2, DISPLAY_WHITE);
+  display.drawLine(x+5, y+2, x+1, y+6, DISPLAY_WHITE);
+  display.drawLine(x+3, y+8, x+5, y+6, DISPLAY_WHITE);
+  display.drawLine(x+5, y+6, x+1, y+2, DISPLAY_WHITE);
 }
 
 void drawIdle() {
@@ -381,8 +415,8 @@ void drawIdle() {
 
   if (cpu_temp > 85 || gpu_temp > 85) {
     if ((millis() / 500) % 2 == 0) { // Blink every 500ms
-      display.fillRect(0, 0, 128, 64, SSD1306_WHITE);
-      display.setTextColor(SSD1306_BLACK);
+      display.fillRect(0, 0, 128, 64, DISPLAY_WHITE);
+      display.setTextColor(DISPLAY_BLACK);
       display.setTextSize(2);
       display.setCursor(20, 15);
       display.println("ALERT!");
@@ -396,7 +430,7 @@ void drawIdle() {
   }
   
   display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
+  display.setTextColor(DISPLAY_WHITE);
   
   // Header
   display.setCursor(28, 0);
@@ -450,7 +484,7 @@ void drawUpdateScreen() {
     
     // Texts
     display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
+    display.setTextColor(DISPLAY_WHITE);
     
     display.setCursor(20, 35);
     display.println("Updating...");
@@ -475,11 +509,11 @@ void drawUpdateScreen() {
       int dotDistance = (i - (frame % 8) + 8) % 8;
       
       if (dotDistance < 2) {
-        display.fillCircle(x, y, 2, SSD1306_WHITE); // Big dot
+        display.fillCircle(x, y, 2, DISPLAY_WHITE); // Big dot
       } else if (dotDistance < 4) {
-        display.drawCircle(x, y, 1, SSD1306_WHITE); // Medium dot
+        display.drawCircle(x, y, 1, DISPLAY_WHITE); // Medium dot
       } else {
-        display.drawPixel(x, y, SSD1306_WHITE); // Small dot
+        display.drawPixel(x, y, DISPLAY_WHITE); // Small dot
       }
     }
     
@@ -519,12 +553,12 @@ void drawAction() {
   
   if (lastActionKeyIndex == -3) {
     display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
+    display.setTextColor(DISPLAY_WHITE);
     if (encMode == 0 || encMode == 5) {
       display.setCursor(encMode == 0 ? 46 : 40, 15);
       display.print(encMode == 0 ? "VOLUME" : "APP VOL");
-      display.drawRect(14, 35, 100, 10, SSD1306_WHITE);
-      display.fillRect(14, 35, visualVolume, 10, SSD1306_WHITE);
+      display.drawRect(14, 35, 100, 10, DISPLAY_WHITE);
+      display.fillRect(14, 35, visualVolume, 10, DISPLAY_WHITE);
     } else if (encMode == 1) {
       display.setCursor(52, 28);
       display.print("ZOOM");
@@ -579,9 +613,9 @@ void drawAction() {
 
   if (lastActionKeyIndex == -4) {
     display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    printCentered("AUDIO", 15, SSD1306_WHITE);
-    printCentered(customMsg, 35, SSD1306_WHITE);
+    display.setTextColor(DISPLAY_WHITE);
+    printCentered("AUDIO", 15, DISPLAY_WHITE);
+    printCentered(customMsg, 35, DISPLAY_WHITE);
     display.display();
     if (elapsed > 1500) {
       currentState = STATE_IDLE;
@@ -593,23 +627,23 @@ void drawAction() {
   if (currentAnim == 0) {
     int maxRadius = 40;
     int radius = (elapsed * maxRadius) / ACTION_DURATION;
-    display.drawCircle(SCREEN_WIDTH/2, SCREEN_HEIGHT/2, radius, SSD1306_WHITE);
-    if (radius > 5) display.drawCircle(SCREEN_WIDTH/2, SCREEN_HEIGHT/2, radius - 5, SSD1306_WHITE);
+    display.drawCircle(SCREEN_WIDTH/2, SCREEN_HEIGHT/2, radius, DISPLAY_WHITE);
+    if (radius > 5) display.drawCircle(SCREEN_WIDTH/2, SCREEN_HEIGHT/2, radius - 5, DISPLAY_WHITE);
     
     if (lastActionKeyIndex == -1) {
-      drawMicIcon(SCREEN_WIDTH/2, SCREEN_HEIGHT/2, SSD1306_WHITE, SSD1306_BLACK);
+      drawMicIcon(SCREEN_WIDTH/2, SCREEN_HEIGHT/2, DISPLAY_WHITE, DISPLAY_BLACK);
     } else {
-      printCentered(dispText, 25, SSD1306_WHITE);
+      printCentered(dispText, 25, DISPLAY_WHITE);
     }
     
   } else if (currentAnim == 1) {
-    uint16_t color = ((elapsed / 100) % 2 == 0) ? SSD1306_BLACK : SSD1306_WHITE;
-    uint16_t bg = ((elapsed / 100) % 2 == 0) ? SSD1306_WHITE : SSD1306_BLACK;
+    uint16_t color = ((elapsed / 100) % 2 == 0) ? DISPLAY_BLACK : DISPLAY_WHITE;
+    uint16_t bg = ((elapsed / 100) % 2 == 0) ? DISPLAY_WHITE : DISPLAY_BLACK;
     
-    if (bg == SSD1306_WHITE) {
-      display.fillRect(10, 15, 108, 34, SSD1306_WHITE);
+    if (bg == DISPLAY_WHITE) {
+      display.fillRect(10, 15, 108, 34, DISPLAY_WHITE);
     } else {
-      display.drawRect(10, 15, 108, 34, SSD1306_WHITE);
+      display.drawRect(10, 15, 108, 34, DISPLAY_WHITE);
     }
     
     if (lastActionKeyIndex == -1) {
@@ -620,16 +654,16 @@ void drawAction() {
     
   } else if (currentAnim == 2) {
     if (lastActionKeyIndex == -1) {
-      drawMicIcon(SCREEN_WIDTH/2, SCREEN_HEIGHT/2, SSD1306_WHITE, SSD1306_BLACK);
+      drawMicIcon(SCREEN_WIDTH/2, SCREEN_HEIGHT/2, DISPLAY_WHITE, DISPLAY_BLACK);
     } else {
-      printCentered(dispText, 25, SSD1306_WHITE);
+      printCentered(dispText, 25, DISPLAY_WHITE);
     }
   } else if (currentAnim == 3) {
     int maxRadius = 40;
     int radius = (elapsed * maxRadius) / ACTION_DURATION;
-    display.drawCircle(SCREEN_WIDTH/2, SCREEN_HEIGHT/2, radius, SSD1306_WHITE);
-    if (radius > 5) display.drawCircle(SCREEN_WIDTH/2, SCREEN_HEIGHT/2, radius - 5, SSD1306_WHITE);
-    drawMicIcon(SCREEN_WIDTH/2, SCREEN_HEIGHT/2, SSD1306_WHITE, SSD1306_BLACK);
+    display.drawCircle(SCREEN_WIDTH/2, SCREEN_HEIGHT/2, radius, DISPLAY_WHITE);
+    if (radius > 5) display.drawCircle(SCREEN_WIDTH/2, SCREEN_HEIGHT/2, radius - 5, DISPLAY_WHITE);
+    drawMicIcon(SCREEN_WIDTH/2, SCREEN_HEIGHT/2, DISPLAY_WHITE, DISPLAY_BLACK);
   }
 
   display.display();
@@ -644,15 +678,15 @@ void drawAction() {
 void drawMenu() {
   display.clearDisplay();
   display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
+  display.setTextColor(DISPLAY_WHITE);
   display.setCursor(0, 0);
   display.println("-- SETTINGS MENU --");
   display.setCursor(0, 20);
   display.println("Set Brightness:");
   
-  display.drawRect(10, 40, 100, 10, SSD1306_WHITE);
+  display.drawRect(10, 40, 100, 10, DISPLAY_WHITE);
   int w = map(brightness, 0, 255, 0, 100);
-  display.fillRect(10, 40, w, 10, SSD1306_WHITE);
+  display.fillRect(10, 40, w, 10, DISPLAY_WHITE);
   display.display();
 }
 
@@ -733,12 +767,11 @@ void setup() {
   setupWiFi();
   
   Wire.begin();
-  if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
-    Serial.println(F("SSD1306 allocation failed"));
+  if(!DISPLAY_BEGIN()) {
+    Serial.println(F(ALLOC_FAILED_MSG));
   }
-  
-  display.ssd1306_command(SSD1306_SETCONTRAST);
-  display.ssd1306_command(brightness);
+
+  SET_BRIGHTNESS(brightness);
   display.clearDisplay();
   display.display();
   
