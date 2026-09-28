@@ -273,6 +273,7 @@ void loadConfig() {
     keyTexts[i] = preferences.getString(key, "");
   }
   if (encMode < 0 || encMode > 5) encMode = 0;
+  preferences.end();
 
   // Button GPIOs: read persisted values, fall back to defaults if invalid
   // (e.g. after a bad CFG:PINS: or a Preferences wipe).
