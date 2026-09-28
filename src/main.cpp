@@ -87,9 +87,44 @@ void IRAM_ATTR readEncoder() {
 }
 
 // Pins
-const int SWITCH_PINS[8] = {13, 12, 14, 27, 32, 33, 25, 26};
+// Default button GPIOs; overridable at runtime via CFG:PINS: from the PC app.
+const int DEFAULT_SWITCH_PINS[8] = {13, 12, 14, 27, 32, 33, 25, 26};
+int switchPins[8];  // current pin for each button, populated from Preferences
 const uint8_t MACRO_KEYS[8] = {KEY_F13, KEY_F14, KEY_F15, KEY_F16, KEY_F17, KEY_F18, KEY_F19, KEY_F20};
+
+// GPIOs already in use by other peripherals — not available for buttons.
+const int OCCUPIED_PINS[] = {ENCODER_CLK, ENCODER_DT, ENCODER_SW, 4 /*menuBtn*/, 21 /*OLED SDA*/, 22 /*OLED SCL*/};
+const int NUM_OCCUPIED = sizeof(OCCUPIED_PINS) / sizeof(OCCUPIED_PINS[0]);
+
+bool isValidButtonPin(int pin) {
+  if (pin < 0 || pin > 39) return false;            // ESP32 has GPIO 0-39
+  for (int i = 0; i < NUM_OCCUPIED; i++) {
+    if (pin == OCCUPIED_PINS[i]) return false;
+  }
+  return true;
+}
+
+bool isValidPinSet(const int pins[8]) {
+  for (int i = 0; i < 8; i++) {
+    if (!isValidButtonPin(pins[i])) return false;
+    for (int j = i + 1; j < 8; j++) {
+      if (pins[i] == pins[j]) return false;  // no duplicates
+    }
+  }
+  return true;
+}
+
 Bounce2::Button switches[8];
+
+// Re-attach every button to its (possibly new) GPIO. Bounce2::attach()
+// detaches the old pin and binds the new one, so no restart is needed.
+void applyButtonPins() {
+  for (int i = 0; i < 8; i++) {
+    switches[i].attach(switchPins[i], INPUT_PULLUP);
+    switches[i].interval(25);
+    switches[i].setPressedState(LOW);
+  }
+}
 Bounce2::Button menuBtn;
 int currentIdleScreen = 0; // 0=Stats, 1=Time, 2=Eyes
 
@@ -131,6 +166,11 @@ void saveConfig() {
     char key[10];
     sprintf(key, "kbanim%d", i);
     preferences.putInt(key, keyAnims[i]);
+  }
+  for(int i=0; i<8; i++) {
+    char key[10];
+    sprintf(key, "pin%d", i);
+    preferences.putInt(key, switchPins[i]);
   }
   preferences.end();
 }
@@ -183,11 +223,32 @@ void loadConfig() {
     char key[10];
     sprintf(key, "kbanim%d", i);
     keyAnims[i] = preferences.getInt(key, -1);
-    
+
     sprintf(key, "kbtxt%d", i);
     keyTexts[i] = preferences.getString(key, "");
   }
   if (encMode < 0 || encMode > 5) encMode = 0;
+
+  // Button GPIOs: read persisted values, fall back to defaults if invalid
+  // (e.g. after a bad CFG:PINS: or a Preferences wipe).
+  int loaded[8];
+  bool anyInvalid = false;
+  for(int i=0; i<8; i++) {
+    char key[10];
+    sprintf(key, "pin%d", i);
+    loaded[i] = preferences.getInt(key, DEFAULT_SWITCH_PINS[i]);
+    if (!isValidButtonPin(loaded[i])) anyInvalid = true;
+  }
+  for (int i = 0; i < 8; i++) {
+    for (int j = i + 1; j < 8; j++) {
+      if (loaded[i] == loaded[j]) { anyInvalid = true; break; }
+    }
+  }
+  if (anyInvalid) {
+    for (int i = 0; i < 8; i++) switchPins[i] = DEFAULT_SWITCH_PINS[i];
+  } else {
+    for (int i = 0; i < 8; i++) switchPins[i] = loaded[i];
+  }
   preferences.end();
 }
 
@@ -245,7 +306,27 @@ void processCommand(String data) {
         preferences.putString(pk, txt);
         preferences.end();
       }
-    } else if (data.startsWith("CFG:WIFI:")) {
+    } else if (data.startsWith("CFG:PINS:")) {
+    // CFG:PINS:13,12,14,27,32,33,25,26  — one GPIO per button, comma separated
+    String payload = data.substring(9);
+    int newPins[8];
+    bool ok = true;
+    for (int i = 0; i < 8; i++) {
+      int comma = payload.indexOf(',');
+      String token = (comma == -1) ? payload : payload.substring(0, comma);
+      token.trim();
+      newPins[i] = token.toInt();
+      if (newPins[i] <= 0 && token.length() > 0 && token[0] != '0') ok = false;
+      if (comma == -1) break;
+      payload = payload.substring(comma + 1);
+    }
+    if (ok && isValidPinSet(newPins)) {
+      for (int i = 0; i < 8; i++) switchPins[i] = newPins[i];
+      applyButtonPins();
+      saveConfig();
+    }
+    // Invalid payloads are silently ignored — device keeps its last valid config.
+} else if (data.startsWith("CFG:WIFI:")) {
       String payload = data.substring(9);
       int pipeIdx = payload.indexOf('|');
       if (pipeIdx != -1) {
@@ -772,10 +853,10 @@ void loopWiFi() {
 void setup() {
   Serial.begin(115200);
   Serial.setTimeout(10);
-  loadConfig();
-  
+  loadConfig();  // populates switchPins[] from Preferences (or defaults)
+
   setupWiFi();
-  
+
   Wire.begin();
   if(!DISPLAY_BEGIN()) {
     Serial.println(F(ALLOC_FAILED_MSG));
@@ -799,12 +880,8 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(ENCODER_CLK), readEncoder, CHANGE);
   attachInterrupt(digitalPinToInterrupt(ENCODER_DT), readEncoder, CHANGE);
   
-  for(int i = 0; i < 8; i++) {
-    switches[i].attach(SWITCH_PINS[i], INPUT_PULLUP);
-    switches[i].interval(25);
-    switches[i].setPressedState(LOW);
-  }
-  
+applyButtonPins();
+
   menuBtn.attach(4, INPUT_PULLUP);
   menuBtn.interval(25);
   menuBtn.setPressedState(LOW);

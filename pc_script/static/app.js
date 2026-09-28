@@ -113,6 +113,9 @@ const i18n = {
         footer_developed_by: "Developed by",
         panel_subtitle: "Configuring Switch ",
         sw_legend: "(SW = Switch)",
+        btn_pins_title: "Button GPIOs",
+        btn_pins_hint: "Assign a GPIO to each physical button. Reserved pins (4, 5, 18, 19, 21, 22) are in use by the encoder, menu button and OLED.",
+        pins_reset: "Reset to Default",
         new_version: "New firmware version available:",
         update_now: "Update now",
         new_app_version: "New BindDeck app version available:",
@@ -196,6 +199,9 @@ const i18n = {
         footer_developed_by: "Desarrollado por",
         panel_subtitle: "Configuración Switch ",
         sw_legend: "(SW = Interruptor)",
+        btn_pins_title: "GPIOs de los Botones",
+        btn_pins_hint: "Asigna un GPIO a cada botón físico. Los pins reservados (4, 5, 18, 19, 21, 22) están en uso por el encoder, el botón menú y el OLED.",
+        pins_reset: "Restablecer",
         new_version: "Nueva versión de firmware disponible:",
         update_now: "Actualizar ahora",
         new_app_version: "Nueva versión de la app BindDeck disponible:",
@@ -279,6 +285,9 @@ const i18n = {
         footer_developed_by: "由 开发",
         panel_subtitle: "配置按键 ",
         sw_legend: "(SW = 开关)",
+        btn_pins_title: "按键 GPIO",
+        btn_pins_hint: "为每个物理按键分配一个 GPIO。保留引脚（4、5、18、19、21、22）已被编码器、菜单键和 OLED 占用。",
+        pins_reset: "恢复默认",
         new_version: "新固件版本可用：",
         update_now: "立即更新",
         new_app_version: "新 BindDeck 应用版本可用：",
@@ -387,6 +396,9 @@ async function fetchConfig() {
             if (config.esp32.ledEffect !== undefined) {
                 document.getElementById('ledEffect').value = config.esp32.ledEffect;
             }
+            if (config.esp32.pins) {
+                renderPinGrid(config.esp32.pins);
+            }
         }
         
         try {
@@ -468,6 +480,106 @@ function playOledPreview(animMode, localOnly = false) {
     }, duration);
 }
 
+const RESERVED_PINS = new Set([4, 5, 18, 19, 21, 22]);
+const DEFAULT_PINS = [13, 12, 14, 27, 32, 33, 25, 26];
+
+function renderPinGrid(pins) {
+    const grid = document.getElementById('pins-grid');
+    if (!grid) return;
+    grid.innerHTML = '';
+    for (let i = 0; i < 8; i++) {
+        const cell = document.createElement('div');
+        cell.style.display = 'flex';
+        cell.style.flexDirection = 'column';
+        cell.style.alignItems = 'center';
+        cell.style.gap = '4px';
+        cell.style.padding = '6px';
+        cell.style.background = 'var(--bg-input)';
+        cell.style.borderRadius = '6px';
+        cell.style.border = '1px solid var(--border)';
+
+        const label = document.createElement('span');
+        label.style.fontSize = '0.7rem';
+        label.style.color = 'var(--text-muted)';
+        label.innerText = 'BTN ' + (i + 1);
+
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.min = '0';
+        input.max = '39';
+        input.value = pins[i];
+        input.style.width = '60px';
+        input.style.padding = '4px';
+        input.style.textAlign = 'center';
+        input.style.borderRadius = '4px';
+        input.style.border = '1px solid var(--border)';
+        input.style.background = 'var(--bg-body)';
+        input.style.color = 'var(--text-main)';
+        input.id = 'pin-' + i;
+
+        cell.appendChild(label);
+        cell.appendChild(input);
+        grid.appendChild(cell);
+    }
+}
+
+function readPinGrid() {
+    const pins = [];
+    for (let i = 0; i < 8; i++) {
+        const el = document.getElementById('pin-' + i);
+        pins.push(el ? parseInt(el.value) || 0 : 0);
+    }
+    return pins;
+}
+
+function validatePins(pins) {
+    if (!pins || pins.length !== 8) return null;
+    const seen = new Set();
+    for (const p of pins) {
+        if (isNaN(p) || p < 0 || p > 39 || RESERVED_PINS.has(p)) return null;
+        if (seen.has(p)) return null;
+        seen.add(p);
+    }
+    return pins;
+}
+
+function showPinsError(msg) {
+    const el = document.getElementById('pins-error');
+    if (el) { el.innerText = msg; el.style.display = 'block'; }
+}
+
+function clearPinsError() {
+    const el = document.getElementById('pins-error');
+    if (el) el.style.display = 'none';
+}
+
+async function saveButtonPins() {
+    const pins = readPinGrid();
+    const valid = validatePins(pins);
+    if (!valid) {
+        showPinsError('Invalid pin assignment: use 0-39, avoid reserved pins (4,5,18,19,21,22) and duplicates.');
+        return false;
+    }
+    clearPinsError();
+    if (!config.esp32) config.esp32 = {};
+    config.esp32.pins = valid;
+    try {
+        await fetch('/api/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(config)
+        });
+    } catch (e) {
+        return false;
+    }
+    return true;
+}
+
+function resetButtonPins() {
+    renderPinGrid(DEFAULT_PINS);
+    clearPinsError();
+}
+
 async function saveSettings(silent = false) {
     if (currentKey) {
         config.keys[currentKey] = {
@@ -486,6 +598,7 @@ async function saveSettings(silent = false) {
     config.esp32.hwLeds = document.getElementById('hwHasLeds').checked;
     config.esp32.ledColor = document.getElementById('globalLedColor').value;
     config.esp32.ledEffect = parseInt(document.getElementById('ledEffect').value);
+    config.esp32.pins = readPinGrid();
 
     if (!config.app) config.app = {};
     config.app.theme = document.getElementById('appTheme').value;

@@ -65,7 +65,7 @@ else:
 serial_port = None
 config = {
     "keys": {str(i): {"type": "none", "value": "", "anim": -1} for i in range(13, 22)},
-    "esp32": {"animMode": 0, "encMode": 0},
+    "esp32": {"animMode": 0, "encMode": 0, "pins": [13, 12, 14, 27, 32, 33, 25, 26]},
     "app": {"theme": "dark", "lang": "en", "startup": False, "closeMode": "ask"}
 }
 
@@ -177,6 +177,26 @@ def save_config():
         manage_startup(config.get("app", {}).get("startup", False))
     except Exception as e:
         print("Error saving config:", e)
+
+# GPIOs already used by other peripherals — not assignable to buttons.
+_RESERVED_PINS = {4, 5, 18, 19, 21, 22}
+
+def _valid_pin_set(pins):
+    """Validate a button GPIO assignment before sending it to the device."""
+    if not isinstance(pins, list) or len(pins) != 8:
+        return False
+    seen = set()
+    for p in pins:
+        try:
+            p = int(p)
+        except (TypeError, ValueError):
+            return False
+        if p < 0 or p > 39 or p in _RESERVED_PINS:
+            return False
+        if p in seen:
+            return False
+        seen.add(p)
+    return True
 
 # --- KEYBOARD HOOKS ---
 last_macro_times = {}
@@ -415,7 +435,16 @@ def api_config():
                 if str(old_esp32.get("brightness", "")) != str(brt):
                     serial_port.write(f"CFG:BRIGHT:{brt}\n".encode('utf-8'))
                     time.sleep(0.1)
-                
+
+                # Button GPIOs — only send when the pin set actually changed
+                new_pins = new_esp32.get("pins")
+                old_pins = old_esp32.get("pins")
+                if new_pins and old_pins and str(new_pins) != str(old_pins):
+                    if _valid_pin_set(new_pins):
+                        pins_str = ",".join(str(int(p)) for p in new_pins)
+                        serial_port.write(f"CFG:PINS:{pins_str}\n".encode('utf-8'))
+                        time.sleep(0.1)
+
                 # Check if key animations changed
                 changed_anims = False
                 kb_anims = []

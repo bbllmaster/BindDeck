@@ -170,6 +170,19 @@
                     Install Official Firmware
                 </button>
             </div>
+
+            <!-- Button GPIO assignment -->
+            <div class="form-group" style="border-top: 1px solid var(--border); padding-top: 15px; margin-top: 15px;">
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+                    <label style="margin: 0; font-weight: bold;" data-i18n="btn_pins_title">Button GPIOs</label>
+                    <button class="btn-secondary" id="btn-pins-reset" style="padding: 4px 10px; font-size: 0.75rem;" data-i18n="pins_reset" onclick="resetButtonPins()">Reset to Default</button>
+                </div>
+                <p style="font-size: 0.72rem; color: var(--text-muted); margin: 0 0 10px 0;" data-i18n="btn_pins_hint">Assign a GPIO to each physical button. Reserved pins (4, 5, 18, 19, 21, 22) are in use by the encoder, menu button and OLED.</p>
+                <div id="pins-grid" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;">
+                    <!-- populated by app.js -->
+                </div>
+                <p id="pins-error" style="font-size: 0.75rem; color: #ef4444; margin: 8px 0 0; display: none;"></p>
+            </div>
         </div>
 
         <!-- CENTER PANEL: Visual Mockup -->
