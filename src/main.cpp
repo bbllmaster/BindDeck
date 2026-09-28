@@ -140,6 +140,12 @@ enum State {
 };
 State currentState = STATE_IDLE;
 
+// Screen sleep: turn off OLED when neither Bluetooth nor USB is active,
+// to cut idle power draw. Wakes on any button press or connection restore.
+const unsigned long SCREEN_OFF_TIMEOUT = 300000; // 5 minutes
+bool screenOff = false;
+unsigned long lastConnectionTime = 0; // updated whenever BT or USB is active
+
 // Telemetry Data
 int cpu_temp = 0, cpu_usage = 0, gpu_temp = 0, gpu_usage = 0;
 
@@ -910,6 +916,12 @@ void loop() {
   menuBtn.update();
   
   if (menuBtn.pressed()) {
+    if (screenOff) {
+      SET_BRIGHTNESS(brightness);
+      screenOff = false;
+      lastConnectionTime = millis();
+      Serial.println("[DBG screen] ON (menu button)");
+    }
     currentIdleScreen = (currentIdleScreen + 1) % 3;
     if (currentIdleScreen == 2) {
        currentState = STATE_EYES;
@@ -927,6 +939,12 @@ void loop() {
     
     for(int i = 0; i < 8; i++) {
       if(switches[i].pressed()) {
+        if (screenOff) {
+          SET_BRIGHTNESS(brightness);
+          screenOff = false;
+          lastConnectionTime = millis();
+          Serial.println("[DBG screen] ON (button press)");
+        }
         if(bleKeyboard.isConnected()) {
           bleKeyboard.press(MACRO_KEYS[i]);
           delay(10);
@@ -943,6 +961,12 @@ void loop() {
     static unsigned long lastEncoderButtonPress = 0;
     if (digitalRead(ENCODER_SW) == LOW) {
       if (millis() - lastEncoderButtonPress > 200) {
+        if (screenOff) {
+          SET_BRIGHTNESS(brightness);
+          screenOff = false;
+          lastConnectionTime = millis();
+          Serial.println("[DBG screen] ON (encoder button)");
+        }
         if (bleKeyboard.isConnected()) {
           bleKeyboard.press(KEY_F21);
           delay(10);
@@ -1000,6 +1024,25 @@ void loop() {
         eyes.setMood(random(0, 4));
         eyeStateStartTime = millis();
       }
+    }
+
+    // --- Screen sleep: turn off OLED when no BT/USB activity ---
+    bool hasBT = bleKeyboard.isConnected();
+    bool hasUSB = (millis() - lastSerialTime < 3000);
+    if (hasBT || hasUSB) {
+      lastConnectionTime = millis();
+    }
+
+    if (!screenOff && (millis() - lastConnectionTime >= SCREEN_OFF_TIMEOUT)) {
+      display.clearDisplay();
+      display.display();
+      SET_BRIGHTNESS(0);
+      screenOff = true;
+      Serial.println("[DBG screen] OFF");
+    } else if (screenOff && (hasBT || hasUSB)) {
+      SET_BRIGHTNESS(brightness);
+      screenOff = false;
+      Serial.println("[DBG screen] ON (connection restored)");
     }
   }
 }
