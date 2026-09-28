@@ -35,6 +35,16 @@
   #define DISPLAY_BEGIN()   display.begin(SCREEN_ADDRESS)
   #define DISPLAY_ROTATION  0
   #define ALLOC_FAILED_MSG  "OLED allocation failed"
+#elif defined(USE_SSD1305)
+  #include <Adafruit_SSD1305.h>
+  #define DISPLAY_WHITE     WHITE
+  #define DISPLAY_BLACK     BLACK
+  #define DISPLAY_INVERSE   WHITE
+  #define SET_BRIGHTNESS(v) do { display.oled_command(SSD1305_SETCONTRAST); \
+                                       display.oled_command(v); } while(0)
+  #define DISPLAY_BEGIN()   display.begin(SCREEN_ADDRESS, true)
+  #define DISPLAY_ROTATION  0
+  #define ALLOC_FAILED_MSG  "SSD1305 allocation failed"
 #else
   #include <Adafruit_SSD1306.h>
   #define DISPLAY_WHITE     SSD1306_WHITE
@@ -62,6 +72,9 @@ WiFiUDP udp;
 #elif defined(USE_SH1106)
   Adafruit_SH1106G display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
   RoboEyes<Adafruit_SH1106G> eyes(display);
+#elif defined(USE_SSD1305)
+  Adafruit_SSD1305 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, SCREEN_ADDRESS, OLED_RESET);
+  RoboEyes<Adafruit_SSD1305> eyes(display);
 #else
   Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
   RoboEyes<Adafruit_SSD1306> eyes(display);
