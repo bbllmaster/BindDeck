@@ -492,15 +492,16 @@ function renderPinGrid(pins) {
         cell.style.display = 'flex';
         cell.style.flexDirection = 'column';
         cell.style.alignItems = 'center';
-        cell.style.gap = '4px';
-        cell.style.padding = '6px';
+        cell.style.gap = '2px';
+        cell.style.padding = '4px 6px';
         cell.style.background = 'var(--bg-input)';
         cell.style.borderRadius = '6px';
         cell.style.border = '1px solid var(--border)';
 
         const label = document.createElement('span');
-        label.style.fontSize = '0.7rem';
+        label.style.fontSize = '0.65rem';
         label.style.color = 'var(--text-muted)';
+        label.style.lineHeight = '1';
         label.innerText = 'BTN ' + (i + 1);
 
         const input = document.createElement('input');
@@ -508,9 +509,10 @@ function renderPinGrid(pins) {
         input.min = '0';
         input.max = '39';
         input.value = pins[i];
-        input.style.width = '60px';
-        input.style.padding = '4px';
+        input.style.width = '52px';
+        input.style.padding = '3px 4px';
         input.style.textAlign = 'center';
+        input.style.fontSize = '0.85rem';
         input.style.borderRadius = '4px';
         input.style.border = '1px solid var(--border)';
         input.style.background = 'var(--bg-body)';
