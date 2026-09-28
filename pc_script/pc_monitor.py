@@ -199,6 +199,7 @@ def load_config():
                 _deep_merge(config, loaded)
         except Exception as e:
             print("Error loading config:", e)
+    print(f"[DBG load_config] esp32.pins = {config.get('esp32', {}).get('pins')!r}")
 
 def manage_startup(enable):
     try:
@@ -447,6 +448,23 @@ def api_flash_local():
         return jsonify({"success": False, "error": str(e)})
 
 
+@app.route('/api/sync_pins', methods=['POST'])
+def api_sync_pins():
+    """Force-send the current button GPIO set to the device, regardless of
+    whether it differs from the last-known state. Useful after a config
+    restore or when the device may have missed a CFG:PINS: earlier."""
+    if serial_port and serial_port.is_open:
+        pins = config.get("esp32", {}).get("pins")
+        if pins and _valid_pin_set(pins):
+            pins_str = ",".join(str(int(p)) for p in pins)
+            try:
+                serial_port.write(f"CFG:PINS:{pins_str}\n".encode('utf-8'))
+                print(f"[DBG CFG:PINS] FORCE SENT -> CFG:PINS:{pins_str}")
+                return jsonify({"success": True})
+            except Exception as e:
+                print("Error sending CFG:PINS:", e)
+    return jsonify({"success": False})
+
 @app.route('/api/config', methods=['GET', 'POST'])
 def api_config():
     global config
@@ -483,11 +501,15 @@ def api_config():
                 # Button GPIOs — only send when the pin set actually changed
                 new_pins = new_esp32.get("pins")
                 old_pins = old_esp32.get("pins")
+                print(f"[DBG CFG:PINS] old_pins={old_pins!r} new_pins={new_pins!r}")
                 if new_pins and old_pins and str(new_pins) != str(old_pins):
                     if _valid_pin_set(new_pins):
                         pins_str = ",".join(str(int(p)) for p in new_pins)
                         serial_port.write(f"CFG:PINS:{pins_str}\n".encode('utf-8'))
+                        print(f"[DBG CFG:PINS] SENT -> CFG:PINS:{pins_str}")
                         time.sleep(0.1)
+                    else:
+                        print(f"[DBG CFG:PINS] REJECTED by _valid_pin_set: {new_pins!r}")
 
                 # Check if key animations changed
                 changed_anims = False

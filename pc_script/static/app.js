@@ -116,6 +116,7 @@ const i18n = {
         btn_pins_title: "Button GPIOs",
         btn_pins_hint: "Assign a GPIO to each physical button. Reserved pins (4, 5, 18, 19, 21, 22) are in use by the encoder, menu button and OLED.",
         pins_reset: "Reset to Default",
+        pins_sync: "Sync to Device",
         new_version: "New firmware version available:",
         update_now: "Update now",
         new_app_version: "New BindDeck app version available:",
@@ -202,6 +203,7 @@ const i18n = {
         btn_pins_title: "GPIOs de los Botones",
         btn_pins_hint: "Asigna un GPIO a cada botón físico. Los pins reservados (4, 5, 18, 19, 21, 22) están en uso por el encoder, el botón menú y el OLED.",
         pins_reset: "Restablecer",
+        pins_sync: "Sincronizar",
         new_version: "Nueva versión de firmware disponible:",
         update_now: "Actualizar ahora",
         new_app_version: "Nueva versión de la app BindDeck disponible:",
@@ -288,6 +290,7 @@ const i18n = {
         btn_pins_title: "按键 GPIO",
         btn_pins_hint: "为每个物理按键分配一个 GPIO。保留引脚（4、5、18、19、21、22）已被编码器、菜单键和 OLED 占用。",
         pins_reset: "恢复默认",
+        pins_sync: "同步到设备",
         new_version: "新固件版本可用：",
         update_now: "立即更新",
         new_app_version: "新 BindDeck 应用版本可用：",
@@ -580,6 +583,26 @@ async function saveButtonPins() {
 function resetButtonPins() {
     renderPinGrid(DEFAULT_PINS);
     clearPinsError();
+}
+
+async function syncButtonPins() {
+    const pins = readPinGrid();
+    const valid = validatePins(pins);
+    if (!valid) {
+        showPinsError('Invalid pin assignment: use 0-39, avoid reserved pins (4,5,18,19,21,22) and duplicates.');
+        return;
+    }
+    clearPinsError();
+    try {
+        const res = await fetch('/api/sync_pins', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+            const btn = document.getElementById('btn-pins-sync');
+            if (btn) { const t = btn.innerText; btn.innerText = "Synced"; setTimeout(() => btn.innerText = t, 1500); }
+        }
+    } catch (e) {
+        console.error('syncButtonPins:', e);
+    }
 }
 
 async function saveSettings(silent = false) {
