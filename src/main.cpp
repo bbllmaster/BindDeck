@@ -79,14 +79,15 @@ Preferences preferences;
 #define MENU_BTN 4
 const int DEFAULT_SWITCH_PINS[8] = {13, 12, 14, 27, 32, 33, 25, 26};
 #else
-// ESP32-C3 DevKitC-02: different pinout, no GPIO34-39, SPI pins 6-11 busy
-#define ENCODER_CLK 18
-#define ENCODER_DT 19
-#define ENCODER_SW 20
+// ESP32-C3 DevKitC-02: GPIO18/19 are UART0 (USB serial), reserved.
+// GPIO6-11 are SPI flash, not usable. GPIO0/2/3 are strapping.
+#define ENCODER_CLK 20
+#define ENCODER_DT 21
+#define ENCODER_SW 1
 #define OLED_SDA 4
 #define OLED_SCL 5
 #define MENU_BTN 10
-const int DEFAULT_SWITCH_PINS[8] = {12, 13, 14, 15, 16, 17, 21, 2};
+const int DEFAULT_SWITCH_PINS[8] = {12, 13, 14, 15, 16, 17, 2, 3};
 #endif
 
 const int8_t enc_states[] = {0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0};
@@ -109,7 +110,11 @@ int switchPins[8];  // current pin for each button, populated from Preferences
 const uint8_t MACRO_KEYS[8] = {KEY_F13, KEY_F14, KEY_F15, KEY_F16, KEY_F17, KEY_F18, KEY_F19, KEY_F20};
 
 // GPIOs already in use by other peripherals — not available for buttons.
+#ifdef TARGET_ESP32C3
+const int OCCUPIED_PINS[] = {ENCODER_CLK, ENCODER_DT, ENCODER_SW, MENU_BTN /*menuBtn*/, OLED_SDA /*OLED SDA*/, OLED_SCL /*OLED SCL*/, 18 /*UART0 TXD*/, 19 /*UART0 RXD*/};
+#else
 const int OCCUPIED_PINS[] = {ENCODER_CLK, ENCODER_DT, ENCODER_SW, MENU_BTN /*menuBtn*/, OLED_SDA /*OLED SDA*/, OLED_SCL /*OLED SCL*/};
+#endif
 const int NUM_OCCUPIED = sizeof(OCCUPIED_PINS) / sizeof(OCCUPIED_PINS[0]);
 
 bool isValidButtonPin(int pin) {
