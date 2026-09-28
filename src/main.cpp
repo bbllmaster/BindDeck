@@ -7,6 +7,7 @@
 #include "RoboEyes.h"
 #include <WiFi.h>
 #include <WiFiUdp.h>
+#include <esp_sleep.h>
 
 // === Display driver abstraction (compile-time selection) ===
 // One of: SSD1306 (default), SH1106G (USE_SH1106), SH1107 (USE_SH1107).
@@ -140,11 +141,12 @@ enum State {
 };
 State currentState = STATE_IDLE;
 
-// Screen sleep: turn off OLED when neither Bluetooth nor USB is active,
-// to cut idle power draw. Wakes on any button press or connection restore.
-const unsigned long SCREEN_OFF_TIMEOUT = 300000; // 5 minutes
-bool screenOff = false;
+// Deep sleep: when neither Bluetooth nor USB is active for SLEEP_TIMEOUT
+// minutes, put the ESP32 into deep sleep (cuts ~all power). Wakes on any
+// physical button press (ext1 wakeup across all button GPIOs).
+const unsigned long SLEEP_TIMEOUT = 300000; // 5 minutes
 unsigned long lastConnectionTime = 0; // updated whenever BT or USB is active
+bool sleepPending = false; // set true once, so we don't re-arm every loop()
 
 // Telemetry Data
 int cpu_temp = 0, cpu_usage = 0, gpu_temp = 0, gpu_usage = 0;
@@ -916,12 +918,6 @@ void loop() {
   menuBtn.update();
   
   if (menuBtn.pressed()) {
-    if (screenOff) {
-      SET_BRIGHTNESS(brightness);
-      screenOff = false;
-      lastConnectionTime = millis();
-      Serial.println("[DBG screen] ON (menu button)");
-    }
     currentIdleScreen = (currentIdleScreen + 1) % 3;
     if (currentIdleScreen == 2) {
        currentState = STATE_EYES;
@@ -939,12 +935,6 @@ void loop() {
     
     for(int i = 0; i < 8; i++) {
       if(switches[i].pressed()) {
-        if (screenOff) {
-          SET_BRIGHTNESS(brightness);
-          screenOff = false;
-          lastConnectionTime = millis();
-          Serial.println("[DBG screen] ON (button press)");
-        }
         if(bleKeyboard.isConnected()) {
           bleKeyboard.press(MACRO_KEYS[i]);
           delay(10);
@@ -961,12 +951,6 @@ void loop() {
     static unsigned long lastEncoderButtonPress = 0;
     if (digitalRead(ENCODER_SW) == LOW) {
       if (millis() - lastEncoderButtonPress > 200) {
-        if (screenOff) {
-          SET_BRIGHTNESS(brightness);
-          screenOff = false;
-          lastConnectionTime = millis();
-          Serial.println("[DBG screen] ON (encoder button)");
-        }
         if (bleKeyboard.isConnected()) {
           bleKeyboard.press(KEY_F21);
           delay(10);
@@ -1026,23 +1010,29 @@ void loop() {
       }
     }
 
-    // --- Screen sleep: turn off OLED when no BT/USB activity ---
+    // --- Deep sleep: when no BT/USB activity for SLEEP_TIMEOUT, put ESP32
+    // --- into deep sleep. Wakes on any button press via ext1 wakeup. ---
     bool hasBT = bleKeyboard.isConnected();
     bool hasUSB = (millis() - lastSerialTime < 3000);
     if (hasBT || hasUSB) {
       lastConnectionTime = millis();
     }
 
-    if (!screenOff && (millis() - lastConnectionTime >= SCREEN_OFF_TIMEOUT)) {
+    if (!sleepPending && (millis() - lastConnectionTime >= SLEEP_TIMEOUT)) {
+      sleepPending = true;
+      // ESP32 ext1 only supports ALL_LOW or ANY_HIGH. Buttons are
+      // normally HIGH (pull-up) and go LOW when pressed, so we use
+      // ext0 on the menu button (GPIO4) as the primary wake source.
+      // Other buttons work while the device is awake; deep sleep is
+      // only entered after extended idle, and the menu button wakes it.
+      pinMode(4, INPUT_PULLUP);
+      esp_sleep_enable_ext0_wakeup(GPIO_NUM_4, 0); // 0 = LOW level wakeup
       display.clearDisplay();
       display.display();
       SET_BRIGHTNESS(0);
-      screenOff = true;
-      Serial.println("[DBG screen] OFF");
-    } else if (screenOff && (hasBT || hasUSB)) {
-      SET_BRIGHTNESS(brightness);
-      screenOff = false;
-      Serial.println("[DBG screen] ON (connection restored)");
+      Serial.println("[DBG sleep] entering deep sleep (wake on GPIO4)...");
+      delay(100);
+      esp_deep_sleep_start();
     }
   }
 }
