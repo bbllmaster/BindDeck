@@ -892,7 +892,13 @@ void setupWiFi() {
   String ssid = preferences.getString("wifiSSID", WIFI_SSID);
   String pwd = preferences.getString("wifiPwd", WIFI_PASSWORD);
   preferences.end();
-  
+
+  // On first boot the NVS keys don't exist yet; getString returns the
+  // default, but if it ever comes back empty fall back to the hardcoded
+  // credentials so WiFi.begin() doesn't get a NULL/empty SSID.
+  if (ssid.length() == 0) ssid = WIFI_SSID;
+  if (pwd.length() == 0) pwd = WIFI_PASSWORD;
+
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid.c_str(), pwd.c_str());
   configTzTime("CET-1CEST,M3.5.0,M10.5.0/3", "pool.ntp.org");
