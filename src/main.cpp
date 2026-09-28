@@ -119,6 +119,9 @@ Bounce2::Button switches[8];
 // Re-attach every button to its (possibly new) GPIO. Bounce2::attach()
 // detaches the old pin and binds the new one, so no restart is needed.
 void applyButtonPins() {
+  Serial.print("[DBG applyButtonPins] attaching to {");
+  for (int i = 0; i < 8; i++) { Serial.print(switchPins[i]); if (i < 7) Serial.print(","); }
+  Serial.println("}");
   for (int i = 0; i < 8; i++) {
     switches[i].attach(switchPins[i], INPUT_PULLUP);
     switches[i].interval(25);
@@ -250,6 +253,9 @@ void loadConfig() {
     for (int i = 0; i < 8; i++) switchPins[i] = loaded[i];
   }
   preferences.end();
+  Serial.print("[DBG load_config] switchPins={");
+  for (int i = 0; i < 8; i++) { Serial.print(switchPins[i]); if (i < 7) Serial.print(","); }
+  Serial.println("}");
 }
 
 // Track last time we received data (Serial or WiFi)
@@ -320,10 +326,22 @@ void processCommand(String data) {
       if (comma == -1) break;
       payload = payload.substring(comma + 1);
     }
+    Serial.print("[DBG CFG:PINS] recv payload='");
+    Serial.print(data.substring(9));
+    Serial.print("' parsed={");
+    for (int i = 0; i < 8; i++) { Serial.print(newPins[i]); if (i < 7) Serial.print(","); }
+    Serial.print("} ok="); Serial.print(ok);
+    Serial.print(" valid="); Serial.print(isValidPinSet(newPins));
+    Serial.println();
     if (ok && isValidPinSet(newPins)) {
       for (int i = 0; i < 8; i++) switchPins[i] = newPins[i];
       applyButtonPins();
       saveConfig();
+      Serial.print("[DBG CFG:PINS] APPLIED switchPins={");
+      for (int i = 0; i < 8; i++) { Serial.print(switchPins[i]); if (i < 7) Serial.print(","); }
+      Serial.println("}");
+    } else {
+      Serial.println("[DBG CFG:PINS] REJECTED — keeping previous switchPins");
     }
     // Invalid payloads are silently ignored — device keeps its last valid config.
 } else if (data.startsWith("CFG:WIFI:")) {
