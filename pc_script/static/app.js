@@ -420,6 +420,12 @@ async function fetchConfig() {
             document.getElementById('appLang').value = config.app.lang || 'en';
             document.getElementById('appStartup').checked = config.app.startup || false;
             document.getElementById('closeMode').value = config.app.closeMode || 'ask';
+
+            // Sleep settings (esp32 section)
+            const sleepEl = document.getElementById('appSleep');
+            if (sleepEl) sleepEl.checked = config.esp32 ? (config.esp32.sleepEnabled !== false) : true;
+            const sleepTimeoutEl = document.getElementById('appSleepTimeout');
+            if (sleepTimeoutEl) sleepTimeoutEl.value = config.esp32 ? (config.esp32.sleepTimeout || 5) : 5;
             
             applyTheme(config.app.theme || 'dark');
             applyLanguage(config.app.lang || 'en');
@@ -612,6 +618,8 @@ async function saveSettings(silent = false) {
     config.esp32.ledColor = document.getElementById('globalLedColor').value;
     config.esp32.ledEffect = parseInt(document.getElementById('ledEffect').value);
     config.esp32.pins = readPinGrid();
+    config.esp32.sleepEnabled = document.getElementById('appSleep').checked;
+    config.esp32.sleepTimeout = parseInt(document.getElementById('appSleepTimeout').value);
 
     if (!config.app) config.app = {};
     config.app.theme = document.getElementById('appTheme').value;

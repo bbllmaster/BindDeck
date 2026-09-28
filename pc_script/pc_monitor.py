@@ -98,7 +98,7 @@ else:
 serial_port = None
 config = {
     "keys": {str(i): {"type": "none", "value": "", "anim": -1} for i in range(13, 22)},
-    "esp32": {"animMode": 0, "encMode": 0, "pins": [13, 12, 14, 27, 32, 33, 25, 26]},
+    "esp32": {"animMode": 0, "encMode": 0, "pins": [13, 12, 14, 27, 32, 33, 25, 26], "sleepEnabled": True, "sleepTimeout": 5},
     "app": {"theme": "dark", "lang": "en", "startup": False, "closeMode": "ask"}
 }
 
@@ -496,6 +496,15 @@ def api_config():
                 if brt is None: brt = 255
                 if str(old_esp32.get("brightness", "")) != str(brt):
                     serial_port.write(f"CFG:BRIGHT:{brt}\n".encode('utf-8'))
+                    time.sleep(0.1)
+
+                # Sleep mode: CFG:SLEEP:<enabled>,<timeout_minutes>
+                sleep_enabled = new_esp32.get("sleepEnabled", True)
+                sleep_timeout = new_esp32.get("sleepTimeout", 5)
+                if str(old_esp32.get("sleepEnabled", "")) != str(sleep_enabled) or \
+                   str(old_esp32.get("sleepTimeout", "")) != str(sleep_timeout):
+                    serial_port.write(f"CFG:SLEEP:{int(bool(sleep_enabled))},{int(sleep_timeout)}\n".encode('utf-8'))
+                    print(f"[DBG CFG:SLEEP] SENT -> enabled={sleep_enabled} timeout={sleep_timeout}m")
                     time.sleep(0.1)
 
                 # Button GPIOs — only send when the pin set actually changed

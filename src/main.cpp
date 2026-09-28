@@ -141,10 +141,11 @@ enum State {
 };
 State currentState = STATE_IDLE;
 
-// Deep sleep: when neither Bluetooth nor USB is active for SLEEP_TIMEOUT
-// minutes, put the ESP32 into deep sleep (cuts ~all power). Wakes on any
-// physical button press (ext1 wakeup across all button GPIOs).
-const unsigned long SLEEP_TIMEOUT = 300000; // 5 minutes
+// Deep sleep: when neither Bluetooth nor USB is active for the configured
+// timeout, put the ESP32 into deep sleep (cuts ~all power). Wakes on the
+// menu button (GPIO4) via ext0. Disabled entirely when sleepEnabled is false.
+bool sleepEnabled = true;
+unsigned long sleepTimeoutMs = 300000; // default 5 min
 unsigned long lastConnectionTime = 0; // updated whenever BT or USB is active
 bool sleepPending = false; // set true once, so we don't re-arm every loop()
 
@@ -183,6 +184,8 @@ void saveConfig() {
     sprintf(key, "pin%d", i);
     preferences.putInt(key, switchPins[i]);
   }
+  preferences.putBool("sleepEnabled", sleepEnabled);
+  preferences.putULong("sleepTimeoutMs", sleepTimeoutMs);
   preferences.end();
 }
 
@@ -261,6 +264,9 @@ void loadConfig() {
     for (int i = 0; i < 8; i++) switchPins[i] = loaded[i];
   }
   preferences.end();
+  sleepEnabled = preferences.getBool("sleepEnabled", true);
+  sleepTimeoutMs = preferences.getULong("sleepTimeoutMs", 300000);
+  if (sleepTimeoutMs < 60000) sleepTimeoutMs = 300000;
   Serial.print("[DBG load_config] switchPins={");
   for (int i = 0; i < 8; i++) { Serial.print(switchPins[i]); if (i < 7) Serial.print(","); }
   Serial.println("}");
@@ -297,6 +303,16 @@ void processCommand(String data) {
       brightness = data.substring(11).toInt();
       SET_BRIGHTNESS(brightness);
       saveConfig();
+    } else if (data.startsWith("CFG:SLEEP:")) {
+      // CFG:SLEEP:<enabled>,<timeout_minutes>
+      String payload = data.substring(10);
+      int comma = payload.indexOf(',');
+      sleepEnabled = (comma != -1) ? payload.substring(0, comma).toInt() : 1;
+      sleepTimeoutMs = (comma != -1) ? payload.substring(comma + 1).toInt() * 60000UL : 300000UL;
+      if (sleepTimeoutMs < 60000) sleepTimeoutMs = 60000; // min 1 min
+      saveConfig();
+      Serial.print("[DBG CFG:SLEEP] enabled="); Serial.print(sleepEnabled);
+      Serial.print(" timeout_ms="); Serial.println(sleepTimeoutMs);
     } else if (data.startsWith("CFG:KB_ANIM:")) {
       String payload = data.substring(12);
       for(int i=0; i<8; i++) {
@@ -1018,7 +1034,7 @@ void loop() {
       lastConnectionTime = millis();
     }
 
-    if (!sleepPending && (millis() - lastConnectionTime >= SLEEP_TIMEOUT)) {
+    if (!sleepPending && sleepEnabled && (millis() - lastConnectionTime >= sleepTimeoutMs)) {
       sleepPending = true;
       // ESP32 ext1 only supports ALL_LOW or ANY_HIGH. Buttons are
       // normally HIGH (pull-up) and go LOW when pressed, so we use
