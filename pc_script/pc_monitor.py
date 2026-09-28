@@ -21,28 +21,49 @@ import threading
 import json
 import os
 import sys
-import keyboard
-import webview
 import socket
 import urllib.request
-import subprocess
 import GPUtil
 import random
 from flask import Flask, render_template, request, jsonify
 
 window_ref = None
 
-# GUI / Icon dependencies
-import win32gui
-import win32ui
-import win32con
-import win32api
-import win32com.client
+# GUI / Icon dependencies — Windows-only. Wrapped so the app can still import
+# (and run in degraded mode) when these are missing, e.g. on a non-Windows
+# host or a partial pip install. Functions that need them import locally.
+try:
+    import win32gui
+except ImportError:
+    win32gui = None
+try:
+    import win32ui
+except ImportError:
+    win32ui = None
+try:
+    import win32con
+except ImportError:
+    win32con = None
+try:
+    import win32api
+except ImportError:
+    win32api = None
+try:
+    import win32com.client
+except ImportError:
+    win32com.client = None
+try:
+    from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
+except ImportError:
+    AudioUtilities = None
+    ISimpleAudioVolume = None
+try:
+    import pystray
+except ImportError:
+    pystray = None
 from PIL import Image
 import base64
 from io import BytesIO
-from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
-import pystray
 
 
 
