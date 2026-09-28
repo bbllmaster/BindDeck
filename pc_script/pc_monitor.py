@@ -179,13 +179,24 @@ def check_for_updates():
 threading.Thread(target=check_for_updates, daemon=True).start()
 
 # --- CONFIG MANAGEMENT ---
+def _deep_merge(base, override):
+    """Recursively merge override into base. Keys missing from override are
+    kept from base, so a stale macro_config.json (e.g. one saved by an
+    older version without esp32.pins) does not wipe defaults like pins."""
+    for k, v in override.items():
+        if isinstance(v, dict) and isinstance(base.get(k), dict):
+            _deep_merge(base[k], v)
+        else:
+            base[k] = v
+    return base
+
 def load_config():
     global config
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, 'r') as f:
                 loaded = json.load(f)
-                config.update(loaded)
+                _deep_merge(config, loaded)
         except Exception as e:
             print("Error loading config:", e)
 
