@@ -70,9 +70,24 @@ BleKeyboard bleKeyboard("BindDeck", "Custom", 100);
 Preferences preferences;
 
 // Encoder
+#ifndef TARGET_ESP32C3
 #define ENCODER_CLK 18
 #define ENCODER_DT 19
 #define ENCODER_SW 5
+#define OLED_SDA 21
+#define OLED_SCL 22
+#define MENU_BTN 4
+const int DEFAULT_SWITCH_PINS[8] = {13, 12, 14, 27, 32, 33, 25, 26};
+#else
+// ESP32-C3 DevKitC-02: different pinout, no GPIO34-39, SPI pins 6-11 busy
+#define ENCODER_CLK 18
+#define ENCODER_DT 19
+#define ENCODER_SW 20
+#define OLED_SDA 4
+#define OLED_SCL 5
+#define MENU_BTN 10
+const int DEFAULT_SWITCH_PINS[8] = {12, 13, 14, 15, 16, 17, 21, 2};
+#endif
 
 const int8_t enc_states[] = {0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0};
 volatile int encoderSteps = 0;
@@ -89,12 +104,12 @@ void IRAM_ATTR readEncoder() {
 
 // Pins
 // Default button GPIOs; overridable at runtime via CFG:PINS: from the PC app.
-const int DEFAULT_SWITCH_PINS[8] = {13, 12, 14, 27, 32, 33, 25, 26};
+// (Defined above inside the TARGET_ESP32C3 conditional block.)
 int switchPins[8];  // current pin for each button, populated from Preferences
 const uint8_t MACRO_KEYS[8] = {KEY_F13, KEY_F14, KEY_F15, KEY_F16, KEY_F17, KEY_F18, KEY_F19, KEY_F20};
 
 // GPIOs already in use by other peripherals — not available for buttons.
-const int OCCUPIED_PINS[] = {ENCODER_CLK, ENCODER_DT, ENCODER_SW, 4 /*menuBtn*/, 21 /*OLED SDA*/, 22 /*OLED SCL*/};
+const int OCCUPIED_PINS[] = {ENCODER_CLK, ENCODER_DT, ENCODER_SW, MENU_BTN /*menuBtn*/, OLED_SDA /*OLED SDA*/, OLED_SCL /*OLED SCL*/};
 const int NUM_OCCUPIED = sizeof(OCCUPIED_PINS) / sizeof(OCCUPIED_PINS[0]);
 
 bool isValidButtonPin(int pin) {
@@ -924,7 +939,7 @@ void setup() {
   
 applyButtonPins();
 
-  menuBtn.attach(4, INPUT_PULLUP);
+  menuBtn.attach(MENU_BTN, INPUT_PULLUP);
   menuBtn.interval(25);
   menuBtn.setPressedState(LOW);
 }
@@ -1036,19 +1051,54 @@ void loop() {
 
     if (!sleepPending && sleepEnabled && (millis() - lastConnectionTime >= sleepTimeoutMs)) {
       sleepPending = true;
-      // ESP32 ext1 only supports ALL_LOW or ANY_HIGH. Buttons are
-      // normally HIGH (pull-up) and go LOW when pressed, so we use
-      // ext0 on the menu button (GPIO4) as the primary wake source.
-      // Other buttons work while the device is awake; deep sleep is
-      // only entered after extended idle, and the menu button wakes it.
-      pinMode(4, INPUT_PULLUP);
-      esp_sleep_enable_ext0_wakeup(GPIO_NUM_4, 0); // 0 = LOW level wakeup
       display.clearDisplay();
       display.display();
       SET_BRIGHTNESS(0);
-      Serial.println("[DBG sleep] entering deep sleep (wake on GPIO4)...");
+#ifdef TARGET_ESP32C3
+      // ESP32-C3: ext0/ext1 not available for deep sleep (SOC_PM_SUPPORT_EXT_WAKEUP
+      // undefined). Use timer wakeup: wake every 5 s, loop() checks buttons and
+      // goes back to sleep if nothing pressed. Less power cut than ext0 but
+      // the only deep-sleep GPIO-free option on C3.
+      esp_sleep_enable_timer_wakeup(5000000); // 5 s
+      Serial.println("[DBG sleep] entering deep sleep (timer wake 5s)...");
+#else
+      // ESP32 (original): ext1 only supports ALL_LOW or ANY_HIGH. Buttons are
+      // normally HIGH (pull-up) and go LOW when pressed, so we use ext0 on the
+      // menu button as the primary wake source.
+      pinMode(MENU_BTN, INPUT_PULLUP);
+      esp_sleep_enable_ext0_wakeup((gpio_num_t)MENU_BTN, 0);
+      Serial.println("[DBG sleep] entering deep sleep (wake on MENU_BTN)...");
+#endif
       delay(100);
       esp_deep_sleep_start();
     }
   }
+
+#ifdef TARGET_ESP32C3
+  // After timer wake, if no button was pressed during the wake window,
+  // go back to sleep immediately to save power.
+  if (sleepPending) {
+    sleepPending = false;
+    bool anyPressed = false;
+    for (int i = 0; i < 8; i++) switches[i].update();
+    menuBtn.update();
+    for (int i = 0; i < 8; i++) {
+      if (switches[i].pressed()) { anyPressed = true; break; }
+    }
+    if (!anyPressed && !menuBtn.pressed() && digitalRead(ENCODER_SW) == HIGH) {
+      bool hasBT = bleKeyboard.isConnected();
+      bool hasUSB = (millis() - lastSerialTime < 3000);
+      if (!hasBT && !hasUSB) {
+        lastConnectionTime = millis();
+        display.clearDisplay();
+        display.display();
+        SET_BRIGHTNESS(0);
+        esp_sleep_enable_timer_wakeup(5000000);
+        Serial.println("[DBG sleep] timer wake, no activity — back to sleep");
+        delay(100);
+        esp_deep_sleep_start();
+      }
+    }
+  }
+#endif
 }
