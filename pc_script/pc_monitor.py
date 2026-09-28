@@ -27,6 +27,18 @@ import GPUtil
 import random
 from flask import Flask, render_template, request, jsonify
 
+# keyboard and pywebview are in requirements.txt but are platform-specific
+# (pywebview needs a GUI backend; keyboard needs OS-level hooks). Wrap them
+# so a missing install degrades instead of crashing startup.
+try:
+    import keyboard
+except ImportError:
+    keyboard = None
+try:
+    import webview
+except ImportError:
+    webview = None
+
 window_ref = None
 
 # GUI / Icon dependencies — Windows-only. Wrapped so the app can still import
@@ -1095,14 +1107,20 @@ def main():
     threading.Thread(target=udp_listen_loop, daemon=True).start()
     
     # Enganchar teclas F13-F20
-    keyboard.hook(on_key_event, suppress=False)
+    if keyboard is None:
+        print("AVISO: modulo 'keyboard' nao instalado — macros F13-F20 desativadas.")
+    else:
+        keyboard.hook(on_key_event, suppress=False)
 
     import pystray
 
 
     from PIL import Image
-    
+
     global window_ref
+    if webview is None:
+        print("ERRO: modulo 'pywebview' nao instalado — nao e possivel abrir a janela.")
+        sys.exit(1)
     window = webview.create_window('BindDeck', app, width=1200, height=950, background_color='#001f3f')
     window_ref = window
     force_quit = False
