@@ -249,7 +249,18 @@ void drawMicIcon(int x, int y, uint16_t color, uint16_t bg);
 void handleEncoderAction(bool forward);
 
 void loadConfig() {
-  preferences.begin("binddeck", true);
+  // On first boot (or after erase_flash) the NVS namespace doesn't exist
+  // yet. The Arduino Preferences library doesn't auto-create it, so
+  // nvs_open returns NOT_FOUND and the chip watchdogs. Open in read-write
+  // mode so the library creates the namespace on first use.
+  if (!preferences.begin("binddeck", false)) {
+    preferences.end();
+    Serial.println("[DBG load_config] NVS begin failed, using defaults");
+    animMode = 0; encMode = 0; brightness = 255;
+    for (int i = 0; i < 8; i++) { keyAnims[i] = -1; keyTexts[i] = ""; }
+    for (int i = 0; i < 8; i++) switchPins[i] = DEFAULT_SWITCH_PINS[i];
+    return;
+  }
   animMode = preferences.getInt("animMode", 0);
   encMode = preferences.getInt("encMode", 0);
   brightness = preferences.getInt("brightness", 255);
