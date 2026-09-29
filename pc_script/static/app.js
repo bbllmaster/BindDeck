@@ -310,6 +310,7 @@ function applyLanguage(lang) {
     if (syncBtn && dict['sync_tooltip']) {
         syncBtn.title = dict['sync_tooltip'];
     }
+    updatePinsHint();
 }
 
 // THEME (dark / light / system)
@@ -436,10 +437,49 @@ async function fetchConfig() {
             }
         }
         
+        // Load chip-specific pin rules (defaults / reserved / hint) and refresh
+        // the pin editor + selectors for the selected device type.
+        await loadDeviceProfile();
+        
         updateButtonLabels();
     } catch (e) {
         console.error("Error fetching config", e);
     }
+}
+
+async function loadDeviceProfile() {
+    try {
+        const dt = (config.app && config.app.deviceType) || 'esp32';
+        const res = await fetch('/api/device_profile?t=' + new Date().getTime());
+        const prof = await res.json();
+        ACTIVE_PROFILE = {
+            deviceType: prof.deviceType || dt,
+            allowed_pins: prof.allowed_pins,   // null or array
+            reserved: prof.reserved || [4,5,18,19,21,22],
+            default_pins: prof.default_pins || [13,12,14,27,32,33,25,26],
+            hint: prof.hint || ''
+        };
+        updatePinsHint();
+        // If the currently stored pins are invalid for this chip, fall back to
+        // the chip's defaults so we never push an impossible GPIO set.
+        const pins = config.esp32 && config.esp32.pins;
+        if (!pins || !validatePins(pins)) {
+            if (!config.esp32) config.esp32 = {};
+            config.esp32.pins = ACTIVE_PROFILE.default_pins.slice();
+            renderPinGrid(config.esp32.pins);
+        }
+        const chipSel = document.getElementById('deviceChip');
+        if (chipSel) chipSel.value = ACTIVE_PROFILE.deviceType;
+        const connSel = document.getElementById('deviceConnection');
+        if (connSel && config.app) connSel.value = config.app.connection_type || 'usb';
+    } catch (e) {
+        console.error('loadDeviceProfile:', e);
+    }
+}
+
+function updatePinsHint() {
+    const el = document.getElementById('pins-hint');
+    if (el && ACTIVE_PROFILE.hint) el.textContent = ACTIVE_PROFILE.hint;
 }
 
 function updateButtonLabels() {
@@ -489,8 +529,15 @@ function playOledPreview(animMode, localOnly = false) {
     }, duration);
 }
 
-const RESERVED_PINS = new Set([4, 5, 18, 19, 21, 22]);
-const DEFAULT_PINS = [13, 12, 14, 27, 32, 33, 25, 26];
+// Active device profile (chip-specific pin rules), populated from
+// /api/device_profile once config loads. Falls back to classic ESP32 until then.
+let ACTIVE_PROFILE = {
+    deviceType: 'esp32',
+    allowed_pins: null,                 // null => any 0-39 except reserved
+    reserved: [4,5,18,19,21,22],
+    default_pins: [13,12,14,27,32,33,25,26],
+    hint: 'Reserved: 4, 5 (OLED), 18, 19 (UART), 21 (encoder DT), 22 (encoder CLK).'
+};
 
 function renderPinGrid(pins) {
     const grid = document.getElementById('pins-grid');
@@ -516,7 +563,10 @@ function renderPinGrid(pins) {
         const input = document.createElement('input');
         input.type = 'number';
         input.min = '0';
-        input.max = '39';
+        const maxPin = ACTIVE_PROFILE.allowed_pins
+            ? Math.max.apply(null, ACTIVE_PROFILE.allowed_pins)
+            : 39;
+        input.max = String(maxPin);
         input.value = pins[i];
         input.style.width = '52px';
         input.style.padding = '3px 4px';
@@ -546,8 +596,12 @@ function readPinGrid() {
 function validatePins(pins) {
     if (!pins || pins.length !== 8) return null;
     const seen = new Set();
+    const reserved = new Set(ACTIVE_PROFILE.reserved);
+    const allowed = ACTIVE_PROFILE.allowed_pins;
     for (const p of pins) {
-        if (isNaN(p) || p < 0 || p > 39 || RESERVED_PINS.has(p)) return null;
+        if (isNaN(p)) return null;
+        if (allowed && allowed.indexOf(p) === -1) return null;       // explicit allowed set (e.g. C3)
+        if (!allowed && (p < 0 || p > 39 || reserved.has(p))) return null;
         if (seen.has(p)) return null;
         seen.add(p);
     }
@@ -595,8 +649,40 @@ async function saveButtonPins() {
 }
 
 function resetButtonPins() {
-    renderPinGrid(DEFAULT_PINS);
+    renderPinGrid(ACTIVE_PROFILE.default_pins);
     clearPinsError();
+}
+
+async function persistConfig() {
+    try {
+        await fetch('/api/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(config)
+        });
+    } catch (e) { console.error('persistConfig:', e); }
+}
+
+async function onDeviceChipChange() {
+    const sel = document.getElementById('deviceChip');
+    if (!sel) return;
+    if (!config.app) config.app = {};
+    config.app.deviceType = sel.value;
+    // Re-resolve pin rules for the new chip; loadDeviceProfile resets the pin
+    // set to the chip default if the current pins are invalid for it.
+    await loadDeviceProfile();
+    await persistConfig();   // POST pushes the (possibly reset) config + CFG to device
+    const t = sel.value;
+    sel.title = "Saved: " + t;
+    setTimeout(() => { sel.title = ''; }, 1500);
+}
+
+async function onDeviceConnectionChange() {
+    const sel = document.getElementById('deviceConnection');
+    if (!sel) return;
+    if (!config.app) config.app = {};
+    config.app.connection_type = sel.value;
+    await persistConfig();
 }
 
 async function saveSettings(silent = false) {

@@ -478,12 +478,12 @@ void processCommand(String data) {
         preferences.begin("binddeck", true);
         String ssid = preferences.getString("wifiSSID", WIFI_SSID);
         preferences.end();
-        Serial.print("WIFI_INFO:");
-        Serial.print(ssid);
-        Serial.print(",");
-        Serial.println(WiFi.localIP().toString());
+        // sendDataToPC goes over UDP too, so the Wi-Fi status panel works on
+        // C3 (which has no usable USB serial). It also prints to Serial for
+        // classic ESP32, preserving that behavior.
+        sendDataToPC("WIFI_INFO:" + ssid + "," + WiFi.localIP().toString());
       } else {
-        Serial.println("WIFI_INFO:DISCONNECTED,0.0.0.0");
+        sendDataToPC("WIFI_INFO:DISCONNECTED,0.0.0.0");
       }
     } else if (data.startsWith("CMD:PREVIEW:")) {
       previewAnimOverride = data.substring(12).toInt();

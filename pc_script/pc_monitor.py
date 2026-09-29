@@ -96,10 +96,15 @@ else:
     CONFIG_FILE = os.path.join(base_path, "macro_config.json")
 
 serial_port = None
+# Last-known device IPv4, learned from the device's UDP packets on port 4211.
+# Used (as a bonus unicast path) to send CFG/CMD back over Wi-Fi; the primary
+# Wi-Fi path is a broadcast to 255.255.255.255:4210, which the device already
+# listens on (see firmware loopWiFi -> processCommand).
+device_ip = None
 config = {
     "keys": {str(i): {"type": "none", "value": "", "anim": -1} for i in range(13, 22)},
     "esp32": {"animMode": 0, "encMode": 0, "pins": [13, 12, 14, 27, 32, 33, 25, 26], "sleepEnabled": True, "sleepTimeout": 5},
-    "app": {"theme": "dark", "lang": "en", "startup": False, "closeMode": "ask"}
+    "app": {"theme": "dark", "lang": "en", "startup": False, "closeMode": "ask", "deviceType": "esp32", "connection_type": "usb"}
 }
 
 # --- OTA UPDATER ---
@@ -223,11 +228,45 @@ def save_config():
     except Exception as e:
         print("Error saving config:", e)
 
-# GPIOs already used by other peripherals — not assignable to buttons.
-_RESERVED_PINS = {4, 5, 18, 19, 21, 22}
+# --- DEVICE PROFILES (per chip) ---
+# default_pins: the 8 button GPIOs in order.
+# allowed_pins: when not None, these are the ONLY GPIOs the chip permits for
+#   buttons (mirrors the firmware's isValidButtonPin for that chip). When None,
+#   any 0-39 GPIO is allowed except those in `reserved`.
+# reserved: GPIOs the device cannot use for buttons (OLED, encoder, UART, and on
+#   C3 the embedded-flash lines 11-17 which would hard-crash the chip).
+# The ESP32-C3 has no usable 11-17 (flash) and 18/19 are USB-CDC, 20/21 are the
+# encoder, 1 is the shared menu/encoder-press, 4/5 are the OLED.
+DEVICE_PROFILES = {
+    "esp32": {
+        "label": "ESP32",
+        "default_pins": [13, 12, 14, 27, 32, 33, 25, 26],
+        "allowed_pins": None,
+        "reserved": {4, 5, 18, 19, 21, 22},
+        "hint": "Reserved: 4, 5 (OLED), 18, 19 (UART), 21 (encoder DT), 22 (encoder CLK).",
+    },
+    "esp32c3": {
+        "label": "ESP32-C3",
+        "default_pins": [0, 2, 3, 6, 7, 8, 9, 10],
+        "allowed_pins": {0, 2, 3, 6, 7, 8, 9, 10},  # mirrors firmware isValidButtonPin
+        "reserved": {1, 4, 5, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21},
+        "hint": "Reserved: 1 (menu/press), 4,5 (OLED), 20,21 (encoder), 11-17 (embedded flash — DO NOT USE).",
+    },
+}
 
-def _valid_pin_set(pins):
+def get_device_type():
+    return config.get("app", {}).get("deviceType", "esp32")
+
+def get_profile(device_type=None):
+    if device_type is None:
+        device_type = get_device_type()
+    return DEVICE_PROFILES.get(device_type, DEVICE_PROFILES["esp32"])
+
+_RESERVED_PINS = DEVICE_PROFILES["esp32"]["reserved"]  # legacy alias
+
+def _valid_pin_set(pins, device_type=None):
     """Validate a button GPIO assignment before sending it to the device."""
+    prof = get_profile(device_type)
     if not isinstance(pins, list) or len(pins) != 8:
         return False
     seen = set()
@@ -236,12 +275,54 @@ def _valid_pin_set(pins):
             p = int(p)
         except (TypeError, ValueError):
             return False
-        if p < 0 or p > 39 or p in _RESERVED_PINS:
-            return False
+        if prof["allowed_pins"] is not None:
+            if p not in prof["allowed_pins"]:
+                return False
+        else:
+            if p < 0 or p > 39 or p in prof["reserved"]:
+                return False
         if p in seen:
             return False
         seen.add(p)
     return True
+
+def send_to_device(cmd):
+    """Send a CFG:/CMD: line to the device.
+
+    Primary path is a Wi-Fi broadcast to 255.255.255.255:4210 (plus each
+    subnet's directed broadcast) — the device already listens on UDP 4210 and
+    runs processCommand() on every received packet, so this reaches the C3
+    without needing its IP (the C3 has no USB serial). A unicast to the last
+    known device_ip is added when available, and USB serial is used when open
+    (classic ESP32). Returns True if the command left through at least one
+    channel."""
+    payload = (cmd + "\n").encode('utf-8')
+    sent = False
+    try:
+        udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        udp_socket.sendto(payload, ('255.255.255.255', 4210))
+        sent = True
+    except Exception as e:
+        print("UDP broadcast send error:", e)
+    for bcast in get_broadcast_ips():
+        try:
+            udp_socket.sendto(payload, (bcast, 4210))
+            sent = True
+        except Exception:
+            pass
+    if device_ip:
+        try:
+            udp_socket.sendto(payload, (device_ip, 4210))
+            sent = True
+        except Exception:
+            pass
+    if serial_port and serial_port.is_open:
+        try:
+            serial_port.write(payload)
+            sent = True
+        except Exception as e:
+            print("Serial send error:", e)
+    return sent
 
 # --- KEYBOARD HOOKS ---
 last_macro_times = {}
@@ -453,16 +534,15 @@ def api_sync_pins():
     """Force-send the current button GPIO set to the device, regardless of
     whether it differs from the last-known state. Useful after a config
     restore or when the device may have missed a CFG:PINS: earlier."""
-    if serial_port and serial_port.is_open:
-        pins = config.get("esp32", {}).get("pins")
-        if pins and _valid_pin_set(pins):
-            pins_str = ",".join(str(int(p)) for p in pins)
-            try:
-                serial_port.write(f"CFG:PINS:{pins_str}\n".encode('utf-8'))
-                print(f"[DBG CFG:PINS] FORCE SENT -> CFG:PINS:{pins_str}")
-                return jsonify({"success": True})
-            except Exception as e:
-                print("Error sending CFG:PINS:", e)
+    pins = config.get("esp32", {}).get("pins")
+    if pins and _valid_pin_set(pins):
+        pins_str = ",".join(str(int(p)) for p in pins)
+        try:
+            ok = send_to_device(f"CFG:PINS:{pins_str}")
+            print(f"[DBG CFG:PINS] FORCE SENT -> CFG:PINS:{pins_str} ok={ok}")
+            return jsonify({"success": ok})
+        except Exception as e:
+            print("Error sending CFG:PINS:", e)
     return jsonify({"success": False})
 
 @app.route('/api/config', methods=['GET', 'POST'])
@@ -475,7 +555,11 @@ def api_config():
         config = new_cfg
         save_config()
         
-        if serial_port and serial_port.is_open:
+        # Send over USB serial when open, over Wi-Fi when a device IP is known,
+        # or unconditionally when the connection is Wi-Fi (the device receives
+        # the broadcast on UDP 4210 even before it has reported its IP back).
+        if serial_port and serial_port.is_open or device_ip or \
+           new_cfg.get("app", {}).get("connection_type") == "wifi":
             try:
                 new_esp32 = new_cfg.get("esp32", {})
                 new_keys = new_cfg.get("keys", {})
@@ -483,19 +567,19 @@ def api_config():
                 anim = new_esp32.get("animMode", 0)
                 if anim is None: anim = 0
                 if str(old_esp32.get("animMode", "")) != str(anim):
-                    serial_port.write(f"CFG:ANIM:{anim}\n".encode('utf-8'))
+                    send_to_device(f"CFG:ANIM:{anim}")
                     time.sleep(0.1)
 
                 enc = new_esp32.get("encMode", 0)
                 if enc is None: enc = 0
                 if str(old_esp32.get("encMode", "")) != str(enc):
-                    serial_port.write(f"CFG:ENC:{enc}\n".encode('utf-8'))
+                    send_to_device(f"CFG:ENC:{enc}")
                     time.sleep(0.1)
 
                 brt = new_esp32.get("brightness", 255)
                 if brt is None: brt = 255
                 if str(old_esp32.get("brightness", "")) != str(brt):
-                    serial_port.write(f"CFG:BRIGHT:{brt}\n".encode('utf-8'))
+                    send_to_device(f"CFG:BRIGHT:{brt}")
                     time.sleep(0.1)
 
                 # Sleep mode: CFG:SLEEP:<enabled>,<timeout_minutes>
@@ -503,7 +587,7 @@ def api_config():
                 sleep_timeout = new_esp32.get("sleepTimeout", 5)
                 if str(old_esp32.get("sleepEnabled", "")) != str(sleep_enabled) or \
                    str(old_esp32.get("sleepTimeout", "")) != str(sleep_timeout):
-                    serial_port.write(f"CFG:SLEEP:{int(bool(sleep_enabled))},{int(sleep_timeout)}\n".encode('utf-8'))
+                    send_to_device(f"CFG:SLEEP:{int(bool(sleep_enabled))},{int(sleep_timeout)}")
                     print(f"[DBG CFG:SLEEP] SENT -> enabled={sleep_enabled} timeout={sleep_timeout}m")
                     time.sleep(0.1)
 
@@ -514,7 +598,7 @@ def api_config():
                 if new_pins and old_pins and str(new_pins) != str(old_pins):
                     if _valid_pin_set(new_pins):
                         pins_str = ",".join(str(int(p)) for p in new_pins)
-                        serial_port.write(f"CFG:PINS:{pins_str}\n".encode('utf-8'))
+                        send_to_device(f"CFG:PINS:{pins_str}")
                         print(f"[DBG CFG:PINS] SENT -> CFG:PINS:{pins_str}")
                         time.sleep(0.1)
                     else:
@@ -531,7 +615,7 @@ def api_config():
                 
                 if changed_anims:
                     kb_anims_str = ",".join(kb_anims)
-                    serial_port.write(f"CFG:KB_ANIM:{kb_anims_str}\n".encode('utf-8'))
+                    send_to_device(f"CFG:KB_ANIM:{kb_anims_str}")
                     time.sleep(0.1)
                 
                 # Check if key texts changed
@@ -540,7 +624,7 @@ def api_config():
                     old_text = old_keys.get(str(i), {}).get("dispText", "")
                     if str(disp_text) != str(old_text):
                         idx = i - 13
-                        serial_port.write(f"CFG:TXT:{idx}:{disp_text}\n".encode('utf-8'))
+                        send_to_device(f"CFG:TXT:{idx}:{disp_text}")
                         time.sleep(0.1)
                 
             except Exception as e:
@@ -551,11 +635,7 @@ def api_config():
 
 @app.route("/api/preview/<int:mode>", methods=["GET"])
 def api_preview(mode):
-    if serial_port and serial_port.is_open:
-        try:
-            serial_port.write(f"CMD:PREVIEW:{mode}\n".encode('utf-8'))
-        except:
-            pass
+    send_to_device(f"CMD:PREVIEW:{mode}")
     return jsonify({"success": True})
 
 wifi_status_data = {"connected": False, "ssid": "", "ip": ""}
@@ -563,9 +643,10 @@ wifi_status_data = {"connected": False, "ssid": "", "ip": ""}
 @app.route("/api/get_wifi_status", methods=["GET"])
 def api_get_wifi_status():
     global wifi_status_data
-    if serial_port and serial_port.is_open:
+    if serial_port and serial_port.is_open or device_ip or \
+       config.get("app", {}).get("connection_type") == "wifi":
         try:
-            serial_port.write(b"CMD:GET_WIFI\n")
+            send_to_device("CMD:GET_WIFI")
             time.sleep(0.5)
             return jsonify(wifi_status_data)
         except:
@@ -576,24 +657,19 @@ def api_get_wifi_status():
 def api_send_config():
     data = request.json
     cmd = data.get("cmd", "")
-    if serial_port and serial_port.is_open and cmd:
-        try:
-            serial_port.write(cmd.encode('utf-8'))
-        except:
-            pass
+    if cmd:
+        send_to_device(cmd)
     return jsonify({"success": True})
 
 @app.route('/api/simulate', methods=['POST'])
 def api_simulate():
-    if serial_port and serial_port.is_open:
-        try:
-            data = request.json
-            val = int(data.get("id", 0))
-            print(f"SIMULATING {val}")
-            serial_port.write(f"CMD:SIMULATE:{val}\n".encode('utf-8'))
-        except Exception as e:
-            print(f"Error simulate: {e}")
-            pass
+    try:
+        data = request.json
+        val = int(data.get("id", 0))
+        print(f"SIMULATING {val}")
+        send_to_device(f"CMD:SIMULATE:{val}")
+    except Exception as e:
+        print(f"Error simulate: {e}")
     return jsonify({"status": "ok"})
 
 SIMULATE_TEMP = False
@@ -706,13 +782,32 @@ def api_status():
     
     is_usb = serial_port is not None and serial_port.is_open
     is_bt = getattr(app, 'bt_connected', False)
+    is_wifi = device_ip is not None
     
     if is_usb:
         return jsonify({"connected": True, "type": "USB", "ping": random.randint(8, 24), "battery": None})
     elif is_bt:
         return jsonify({"connected": True, "type": "Bluetooth", "ping": random.randint(30, 85), "battery": getattr(app, 'bt_battery', None)})
+    elif is_wifi:
+        return jsonify({"connected": True, "type": "Wi-Fi", "ping": random.randint(2, 12), "battery": None})
     else:
         return jsonify({"connected": False, "type": "None", "ping": 0, "battery": None})
+
+@app.route('/api/device_profile', methods=['GET'])
+def api_device_profile():
+    """Return the active device profile so the UI can show correct default
+    pins, allowed/ reserved GPIOs and hint text for the selected chip."""
+    dt = get_device_type()
+    prof = get_profile(dt)
+    return jsonify({
+        "deviceType": dt,
+        "label": prof["label"],
+        "default_pins": prof["default_pins"],
+        "allowed_pins": sorted(prof["allowed_pins"]) if prof["allowed_pins"] is not None else None,
+        "reserved": sorted(prof["reserved"]),
+        "hint": prof["hint"],
+        "available": list(DEVICE_PROFILES.keys()),
+    })
 
 def check_bt_status_loop():
     ps_cmd = "$dev = Get-PnpDevice -Class Bluetooth | Where-Object { $_.FriendlyName -match 'BindDeck' -and $_.Status -eq 'OK' }; if ($dev) { Write-Output 'CONNECTED'; $prop = Get-PnpDeviceProperty -InstanceId $dev.InstanceId -KeyName '{104EA319-6EE2-4701-BD47-8DDBF425BBE5} 2' -ErrorAction SilentlyContinue; if ($prop -and $prop.Data -ne $null) { Write-Output $prop.Data } }"
@@ -975,12 +1070,18 @@ def serial_read_loop():
         time.sleep(0.02)
 
 def udp_listen_loop():
+    global device_ip
     try:
         listen_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         listen_sock.bind(('0.0.0.0', 4211))
         while True:
             data, addr = listen_sock.recvfrom(1024)
             line = data.decode('utf-8', errors='ignore').strip()
+            # Learn the device's IP so we can unicast CFG/CMD back to it
+            # (the primary Wi-Fi path is a broadcast, but unicast is more
+            # reliable on networks that filter directed/broadcast traffic).
+            if addr:
+                device_ip = addr[0]
             if line.startswith("BTN:"):
                 try:
                     idx = int(line.split(":")[1])
@@ -1002,6 +1103,16 @@ def udp_listen_loop():
                 elif cmd == "TBCK": keyboard.send("ctrl+shift+tab")
                 elif cmd == "REDO": keyboard.send("ctrl+y")
                 elif cmd == "UNDO": keyboard.send("ctrl+z")
+            elif line.startswith("WIFI_INFO:"):
+                # Device reported its Wi-Fi state (populates the TEMP WIRELESS panel)
+                try:
+                    payload = line[len("WIFI_INFO:"):]
+                    parts = payload.split(",")
+                    wifi_status_data["connected"] = True
+                    if len(parts) > 0: wifi_status_data["ssid"] = parts[0]
+                    if len(parts) > 1: wifi_status_data["ip"] = parts[1]
+                except Exception:
+                    pass
     except Exception as e:
         print("UDP Listen Error:", e)
 

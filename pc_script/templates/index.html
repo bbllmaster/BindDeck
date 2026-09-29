@@ -171,6 +171,29 @@
                 </button>
             </div>
 
+            <!-- Device type + connection (added for ESP32-C3 over Wi-Fi) -->
+            <div class="form-group" style="border-top: 1px solid var(--border); padding-top: 15px; margin-top: 10px;">
+                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                    <div style="flex: 1; min-width: 140px;">
+                        <label style="display: block; margin-bottom: 5px; font-size: 0.8rem; color: var(--text-muted);">Chip</label>
+                        <select id="deviceChip" onchange="onDeviceChipChange()">
+                            <option value="esp32">ESP32</option>
+                            <option value="esp32c3">ESP32-C3</option>
+                        </select>
+                    </div>
+                    <div style="flex: 1; min-width: 140px;">
+                        <label style="display: block; margin-bottom: 5px; font-size: 0.8rem; color: var(--text-muted);">Connection</label>
+                        <select id="deviceConnection" onchange="onDeviceConnectionChange()">
+                            <option value="usb">USB</option>
+                            <option value="wifi">Wi-Fi</option>
+                        </select>
+                    </div>
+                </div>
+                <p style="font-size: 0.66rem; color: var(--text-muted); margin: 8px 0 0 0; line-height: 1.3;">
+                    C3 用 Wi-Fi 连接：设备与电脑同一局域网，PC 通过 UDP 广播下发配置（C3 无 USB 串口）。
+                </p>
+            </div>
+
             <!-- Button GPIO assignment -->
             <div class="form-group" style="border-top: 1px solid var(--border); padding-top: 10px; margin-top: 10px; margin-bottom: 0.5rem;">
                 <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
@@ -178,7 +201,7 @@
                     <button class="btn-secondary" id="btn-pins-reset" style="padding: 2px 8px; font-size: 0.7rem;" data-i18n="pins_reset" onclick="resetButtonPins()">Reset to Default</button>
                     <button class="btn-primary" id="btn-pins-save" style="padding: 2px 8px; font-size: 0.7rem;" data-i18n="pins_save" onclick="saveButtonPins()">Save</button>
                 </div>
-                <p style="font-size: 0.68rem; color: var(--text-muted); margin: 0 0 8px 0; line-height: 1.3;" data-i18n="btn_pins_hint">Assign a GPIO to each physical button. Reserved pins (4, 5, 18, 19, 21, 22) are in use by the encoder, menu button and OLED.</p>
+                <p id="pins-hint" style="font-size: 0.68rem; color: var(--text-muted); margin: 0 0 8px 0; line-height: 1.3;" data-i18n="btn_pins_hint">Assign a GPIO to each physical button. Reserved pins (4, 5, 18, 19, 21, 22) are in use by the encoder, menu button and OLED.</p>
                 <div id="pins-grid" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px;">
                     <!-- populated by app.js -->
                 </div>
@@ -429,7 +452,7 @@
         </div>
     </footer>
 
-    <script src="/static/app.js?v=2"></script>
+    <script src="/static/app.js?v=3"></script>
 
     <!-- Guided Tour Overlay -->
     <div id="tutorial-modal" class="tour-overlay" style="display: none;">
