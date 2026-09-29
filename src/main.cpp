@@ -1096,12 +1096,22 @@ void loop() {
   }
 
   
-  if (currentState == STATE_IDLE || currentState == STATE_ACTION || currentState == STATE_EYES) {
+    if (currentState == STATE_IDLE || currentState == STATE_ACTION || currentState == STATE_EYES) {
     parseSerialData();
     loopWiFi();
-    
+
+    // --- BLE connection diagnostic (C3 especially: "paired" in OS != HID
+    // channel open). Logs the firmware's view of the BLE HID connection so we
+    // can tell a missing key-send apart from a key-send the OS ignores. ---
+    static unsigned long _lastBleLog = 0;
+    if (millis() - _lastBleLog > 3000) {
+      _lastBleLog = millis();
+      log_e("[DBG ble] isConnected=%d", (int)bleKeyboard.isConnected());
+    }
+
     for(int i = 0; i < 8; i++) {
       if(switches[i].pressed()) {
+        log_e("[DBG btn] i=%d pressed (ble=%d)", i, (int)bleKeyboard.isConnected());
         if(bleKeyboard.isConnected()) {
           bleKeyboard.press(MACRO_KEYS[i]);
           delay(10);
@@ -1143,6 +1153,7 @@ void loop() {
       noInterrupts();
       int currentSteps = encoderSteps;
       interrupts();
+      log_e("[DBG enc] diff=%d ble=%d", (currentSteps / 4) - (lastEncoderSteps / 4), (int)bleKeyboard.isConnected());
       
       int diff = (currentSteps / 4) - (lastEncoderSteps / 4);
       if (diff > 3) diff = 3;
