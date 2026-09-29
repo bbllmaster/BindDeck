@@ -1,0 +1,70 @@
+// ---------------------------------------------------------------------------
+// Minimal ESP32-C3 BLE HID isolation test.
+//
+// No OLED, no encoder, no buttons, no WiFi, no config mode - nothing but the
+// BLE keyboard. This isolates whether the C3's BLE HID link is stable on its
+// own, independent of the BindDeck firmware.
+//
+// What it does:
+//   - prints isConnected() every 500 ms, and immediately on every change
+//   - reports a "flap" count (connect<->disconnect transitions) per 5 s window
+//   - every 3 s sends a media VOLUME_UP key, so you can literally watch the
+//     PC volume go up. If the volume never moves, HID is not reaching the host.
+// ---------------------------------------------------------------------------
+
+#include <Arduino.h>
+#include <BleKeyboard.h>
+
+BleKeyboard bleKeyboard("C3 HID Test", "Test", 100);
+
+bool          lastConn       = false;
+int           flaps          = 0;
+unsigned long lastPrint      = 0;
+unsigned long lastKey        = 0;
+unsigned long lastFlapReport = 0;
+
+void setup() {
+  Serial.begin(115200);
+  delay(300);
+  Serial.println();
+  Serial.println("[TEST] ==== C3 BLE HID minimal test ====");
+  bleKeyboard.begin();
+  Serial.println("[TEST] advertising started, waiting for host to connect...");
+}
+
+void loop() {
+  unsigned long now = millis();
+
+  bool conn = bleKeyboard.isConnected();
+  if (conn != lastConn) {
+    lastConn = conn;
+    flaps++;
+    Serial.printf("[TEST] %8lu ms  isConnected CHANGED -> %d  (flap #%d)\n",
+                  now, conn ? 1 : 0, flaps);
+  }
+
+  if (now - lastPrint >= 500) {
+    lastPrint = now;
+    Serial.printf("[TEST] %8lu ms  isConnected=%d  flaps=%d\n",
+                  now, conn ? 1 : 0, flaps);
+  }
+
+  if (now - lastFlapReport >= 5000) {
+    lastFlapReport = now;
+    Serial.printf("[TEST] %8lu ms  --- %d flaps in the last 5s window ---\n",
+                  now, flaps);
+    flaps = 0;
+  }
+
+  if (now - lastKey >= 3000) {
+    lastKey = now;
+    if (bleKeyboard.isConnected()) {
+      Serial.printf("[TEST] %8lu ms  >>> sending VOLUME_UP\n", now);
+      bleKeyboard.write(KEY_MEDIA_VOLUME_UP);
+    } else {
+      Serial.printf("[TEST] %8lu ms  ... not connected, skipped key\n", now);
+    }
+  }
+
+  delay(10);
+}
