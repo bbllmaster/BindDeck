@@ -91,7 +91,10 @@ const int DEFAULT_SWITCH_PINS[8] = {13, 12, 14, 27, 32, 33, 25, 26};
 #define OLED_SDA 4
 #define OLED_SCL 5
 #define MENU_BTN 9
-const int DEFAULT_SWITCH_PINS[8] = {2, 3, 6, 7, 8, 15, 16, 17};
+// GPIO17 also stalls the C3 (flash-related line) like 12/13/14, so the 8th
+// button falls back to GPIO0. NOTE: these are flash-safe PLACEHOLDERS, not the
+// board's real button wiring — set the actual pins via CFG:PINS from the PC app.
+const int DEFAULT_SWITCH_PINS[8] = {2, 3, 6, 7, 8, 15, 16, 0};
 #endif
 
 const int8_t enc_states[] = {0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0};
