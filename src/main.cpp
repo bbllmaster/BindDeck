@@ -1007,16 +1007,30 @@ void setup() {
   loadConfig();  // populates switchPins[] from Preferences (or defaults)
   log_e("[DBG setup] loadConfig ok"); delay(30);
 
-  // Config mode: hold the encoder button while powering on to bring WiFi up for
-  // configuration. Otherwise WiFi stays OFF so the BLE HID link is stable.
+  // Config mode: hold the encoder button CONTINUOUSLY for ~2s at boot to bring
+  // WiFi up for configuration. A transient/floating read can't trigger it.
+  // Otherwise WiFi stays OFF so the BLE HID link is stable.
   pinMode(ENCODER_SW, INPUT_PULLUP);
-  if (digitalRead(ENCODER_SW) == LOW) {
-    g_configMode = true;
-    g_configModeStart = millis();
-    log_e("[DBG setup] CONFIG MODE (encoder btn held) - starting WiFi");
-    setupWiFi();
-  } else {
-    log_e("[DBG setup] normal mode - WiFi OFF (BLE only)");
+  {
+    unsigned long holdStart = 0;
+    bool triggered = false;
+    for (int step = 0; step < 100 && !triggered; step++) {  // ~2s @ 20ms
+      if (digitalRead(ENCODER_SW) == LOW) {
+        if (holdStart == 0) holdStart = millis();
+        else if (millis() - holdStart >= 2000) triggered = true;
+      } else {
+        holdStart = 0;
+      }
+      delay(20);
+    }
+    if (triggered) {
+      g_configMode = true;
+      g_configModeStart = millis();
+      log_e("[DBG setup] CONFIG MODE (encoder btn held 2s) - starting WiFi");
+      setupWiFi();
+    } else {
+      log_e("[DBG setup] normal mode - WiFi OFF (BLE only)");
+    }
   }
 
   // CRITICAL for ESP32-C3: the devkit's default I2C pins are GPIO8/9, but this
@@ -1042,13 +1056,11 @@ void setup() {
   eyes.setIdleMode(true, 1, 2);
   log_e("[DBG setup] eyes ok"); delay(30);
   
-  if (!g_configMode) {
-    log_e("[DBG setup] ble begin..."); delay(30);
-    bleKeyboard.begin();
-    log_e("[DBG setup] ble ok"); delay(30);
-  } else {
-    log_e("[DBG setup] ble skipped (config mode)"); delay(30);
-  }
+  // BLE is always initialized: the keyboard must keep working even during the
+  // brief config window, and the OLED must keep drawing (never blank).
+  log_e("[DBG setup] ble begin..."); delay(30);
+  bleKeyboard.begin();
+  log_e("[DBG setup] ble ok"); delay(30);
 
   // Encoder setup
   log_e("[DBG setup] enc pins..."); delay(30);
@@ -1104,18 +1116,29 @@ void loop() {
   _loopCount++;
   if (_loopCount <= 3) { log_e("[DBG loop] iter %d", _loopCount); delay(30); }
 
-  // Config mode: WiFi on, BLE off. Service the UDP CFG channel and wait. Hold
-  // the encoder button again to exit early; otherwise it reboots after timeout.
+  // Config mode: WiFi is on to expose the UDP CFG channel. BLE stays on and the
+  // normal loop keeps running (OLED draws, keyboard works). Exit by holding the
+  // encoder button ~1s, or it auto-disables WiFi after the timeout. There is NO
+  // reboot path here, so a stuck button can never cause a boot loop.
   if (g_configMode) {
     loopWiFi();
-    static bool _encWasLow = false;
-    bool encLow = (digitalRead(ENCODER_SW) == LOW);
-    if (encLow && !_encWasLow) { log_e("[DBG cfg] exit requested, reboot"); delay(50); esp_restart(); }
-    _encWasLow = encLow;
-    if (millis() - g_configModeStart > CONFIG_MODE_MS) {
-      log_e("[DBG cfg] timeout, reboot to BLE mode"); delay(50); esp_restart();
+    static unsigned long _cfgExitHold = 0;
+    if (digitalRead(ENCODER_SW) == LOW) {
+      if (_cfgExitHold == 0) _cfgExitHold = millis();
+      else if (millis() - _cfgExitHold >= 1000) {
+        log_e("[DBG cfg] exit requested, WiFi off -> BLE mode");
+        WiFi.mode(WIFI_OFF);
+        g_configMode = false;
+        _cfgExitHold = 0;
+      }
+    } else {
+      _cfgExitHold = 0;
     }
-    return;
+    if (g_configMode && (millis() - g_configModeStart > CONFIG_MODE_MS)) {
+      log_e("[DBG cfg] timeout, WiFi off -> BLE mode");
+      WiFi.mode(WIFI_OFF);
+      g_configMode = false;
+    }
   }
 
   for(int i = 0; i < 8; i++) switches[i].update();
