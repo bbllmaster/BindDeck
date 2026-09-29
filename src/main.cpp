@@ -120,7 +120,18 @@ const int OCCUPIED_PINS[] = {ENCODER_CLK, ENCODER_DT, ENCODER_SW, MENU_BTN /*men
 const int NUM_OCCUPIED = sizeof(OCCUPIED_PINS) / sizeof(OCCUPIED_PINS[0]);
 
 bool isValidButtonPin(int pin) {
+#ifdef TARGET_ESP32C3
+  // ESP32-C3 only exposes GPIO 0-21 (and some are reserved/strapping).
+  // Reject anything outside this range — a stale pin from an ESP32 build
+  // (e.g. 25/26/32/33) would pass the old >39 check but then hang in
+  // pinMode()/digitalRead() on a non-existent GPIO and trip the watchdog.
+  if (pin < 0 || pin > 21) return false;
+  // Strapping / special pins that must not be used as buttons on C3.
+  if (pin == 0 || pin == 8 || pin == 9 || pin == 11 || pin == 20 || pin == 21)
+    return false;
+#else
   if (pin < 0 || pin > 39) return false;            // ESP32 has GPIO 0-39
+#endif
   for (int i = 0; i < NUM_OCCUPIED; i++) {
     if (pin == OCCUPIED_PINS[i]) return false;
   }
@@ -142,14 +153,15 @@ Bounce2::Button switches[8];
 // Re-attach every button to its (possibly new) GPIO. Bounce2::attach()
 // detaches the old pin and binds the new one, so no restart is needed.
 void applyButtonPins() {
-  Serial.print("[DBG applyButtonPins] attaching to {");
-  for (int i = 0; i < 8; i++) { Serial.print(switchPins[i]); if (i < 7) Serial.print(","); }
-  Serial.println("}");
+  log_e("[DBG apply] start (8 buttons)");
   for (int i = 0; i < 8; i++) {
+    log_e("[DBG apply] i=%d pin=%d attach...", i, switchPins[i]);
     switches[i].attach(switchPins[i], INPUT_PULLUP);
     switches[i].interval(25);
     switches[i].setPressedState(LOW);
+    log_e("[DBG apply] i=%d ok", i);
   }
+  log_e("[DBG apply] done");
 }
 Bounce2::Button menuBtn;
 int currentIdleScreen = 0; // 0=Stats, 1=Time, 2=Eyes
@@ -303,9 +315,9 @@ void loadConfig() {
   sleepTimeoutMs = preferences.getULong("sleepTimeoutMs", 300000);
   if (sleepTimeoutMs < 60000) sleepTimeoutMs = 300000;
   preferences.end();
-  Serial.print("[DBG load_config] switchPins={");
-  for (int i = 0; i < 8; i++) { Serial.print(switchPins[i]); if (i < 7) Serial.print(","); }
-  Serial.println("}");
+  log_e("[DBG load_config] switchPins={");
+  for (int i = 0; i < 8; i++) { log_e("  pin%d=%d%s", i, switchPins[i], (i < 7) ? "," : ""); }
+  log_e("[DBG load_config] switchPins end");
 }
 
 // Track last time we received data (Serial or WiFi)
