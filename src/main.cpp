@@ -75,6 +75,15 @@ const char* WIFI_SSID = "AIRCONECT_FIBRA-5865_5G";
 const char* WIFI_PASSWORD = "ZnP8A6F53bMV[{I,";
 WiFiUDP udp;
 
+// On ESP32-C3 WiFi and BLE share one 2.4 GHz radio. Leaving WiFi STA up during
+// normal use makes the BLE HID link flap (connect/disconnect) even with a single
+// host. So WiFi is OFF by default and only started in an explicit "config mode"
+// (hold the encoder button while powering on). Config mode connects WiFi + opens
+// the UDP CFG channel for ~CONFIG_MODE_MS, then reboots back into BLE-only.
+static bool g_configMode = false;
+static unsigned long g_configModeStart = 0;
+const unsigned long CONFIG_MODE_MS = 60000;
+
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define OLED_RESET    -1
@@ -998,8 +1007,17 @@ void setup() {
   loadConfig();  // populates switchPins[] from Preferences (or defaults)
   log_e("[DBG setup] loadConfig ok"); delay(30);
 
-  setupWiFi();
-  log_e("[DBG setup] wifi ok"); delay(30);
+  // Config mode: hold the encoder button while powering on to bring WiFi up for
+  // configuration. Otherwise WiFi stays OFF so the BLE HID link is stable.
+  pinMode(ENCODER_SW, INPUT_PULLUP);
+  if (digitalRead(ENCODER_SW) == LOW) {
+    g_configMode = true;
+    g_configModeStart = millis();
+    log_e("[DBG setup] CONFIG MODE (encoder btn held) - starting WiFi");
+    setupWiFi();
+  } else {
+    log_e("[DBG setup] normal mode - WiFi OFF (BLE only)");
+  }
 
   // CRITICAL for ESP32-C3: the devkit's default I2C pins are GPIO8/9, but this
   // board wires the OLED to OLED_SDA/OLED_SCL (4/5 on C3). Passing them
@@ -1024,9 +1042,13 @@ void setup() {
   eyes.setIdleMode(true, 1, 2);
   log_e("[DBG setup] eyes ok"); delay(30);
   
-  log_e("[DBG setup] ble begin..."); delay(30);
-  bleKeyboard.begin();
-  log_e("[DBG setup] ble ok"); delay(30);
+  if (!g_configMode) {
+    log_e("[DBG setup] ble begin..."); delay(30);
+    bleKeyboard.begin();
+    log_e("[DBG setup] ble ok"); delay(30);
+  } else {
+    log_e("[DBG setup] ble skipped (config mode)"); delay(30);
+  }
 
   // Encoder setup
   log_e("[DBG setup] enc pins..."); delay(30);
@@ -1081,6 +1103,21 @@ void loop() {
   static int _loopCount = 0;
   _loopCount++;
   if (_loopCount <= 3) { log_e("[DBG loop] iter %d", _loopCount); delay(30); }
+
+  // Config mode: WiFi on, BLE off. Service the UDP CFG channel and wait. Hold
+  // the encoder button again to exit early; otherwise it reboots after timeout.
+  if (g_configMode) {
+    loopWiFi();
+    static bool _encWasLow = false;
+    bool encLow = (digitalRead(ENCODER_SW) == LOW);
+    if (encLow && !_encWasLow) { log_e("[DBG cfg] exit requested, reboot"); delay(50); esp_restart(); }
+    _encWasLow = encLow;
+    if (millis() - g_configModeStart > CONFIG_MODE_MS) {
+      log_e("[DBG cfg] timeout, reboot to BLE mode"); delay(50); esp_restart();
+    }
+    return;
+  }
+
   for(int i = 0; i < 8; i++) switches[i].update();
   menuBtn.update();
   
@@ -1098,7 +1135,8 @@ void loop() {
   
     if (currentState == STATE_IDLE || currentState == STATE_ACTION || currentState == STATE_EYES) {
     parseSerialData();
-    loopWiFi();
+    // WiFi/UDP is serviced only in config mode (see the g_configMode branch at
+    // the top of loop). In normal mode WiFi is off, so this is a no-op here.
 
     // --- BLE connection diagnostic (C3 especially: "paired" in OS != HID
     // channel open). Logs the firmware's view of the BLE HID connection so we
