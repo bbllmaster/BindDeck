@@ -975,14 +975,18 @@ void setup() {
   log_e("[DBG setup] ble begin..."); delay(30);
   bleKeyboard.begin();
   log_e("[DBG setup] ble ok"); delay(30);
-  
+
   // Encoder setup
+  log_e("[DBG setup] enc pins..."); delay(30);
   pinMode(ENCODER_CLK, INPUT_PULLUP);
   pinMode(ENCODER_DT, INPUT_PULLUP);
   pinMode(ENCODER_SW, INPUT_PULLUP);
+  log_e("[DBG setup] enc pins ok"); delay(30);
   attachInterrupt(digitalPinToInterrupt(ENCODER_CLK), readEncoder, CHANGE);
   attachInterrupt(digitalPinToInterrupt(ENCODER_DT), readEncoder, CHANGE);
-  
+  log_e("[DBG setup] enc irq ok"); delay(30);
+
+  log_e("[DBG setup] applyPins..."); delay(30);
 applyButtonPins();
   log_e("[DBG setup] buttons ok"); delay(30);
 
@@ -1005,6 +1009,9 @@ applyButtonPins();
 void loop() {
   static bool _loopStarted = false;
   if (!_loopStarted) { _loopStarted = true; log_e("[DBG loop] started"); delay(30); }
+  static int _loopCount = 0;
+  _loopCount++;
+  if (_loopCount <= 3) { log_e("[DBG loop] iter %d", _loopCount); delay(30); }
   for(int i = 0; i < 8; i++) switches[i].update();
   menuBtn.update();
   
