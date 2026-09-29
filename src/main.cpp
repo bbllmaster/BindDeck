@@ -465,11 +465,16 @@ void parseSerialData() {
 }
 
 // Batery config
-const int BATTERY_PIN = 35; // Analog pin to measure voltage
+#ifndef TARGET_ESP32C3
+const int BATTERY_PIN = 35; // Analog pin to measure voltage (ESP32 classic)
+#else
+const int BATTERY_PIN = -1; // ESP32-C3 has no GPIO35; battery sense not wired
+#endif
 
 bool isBatteryCharging = false;
 
 int getBatteryPercentage() {
+  if (BATTERY_PIN < 0) { isBatteryCharging = false; return -1; }
   static float filteredRaw = -1;
   static unsigned long lastBatteryUpdate = 0;
   
@@ -937,7 +942,14 @@ void setup() {
 
   setupWiFi();
 
-  Wire.begin();
+  // CRITICAL for ESP32-C3: the devkit's default I2C pins are GPIO8/9, but this
+  // board wires the OLED to OLED_SDA/OLED_SCL (4/5 on C3). Passing them
+  // explicitly is required — otherwise Wire talks to the wrong bus, the display
+  // never ACKs, and every I2C write blocks until the peripheral timeout, which
+  // starves the task watchdog (rst:0x8 TG1WDT_SYS_RST). Bound the timeout so a
+  // missing display can never hang the firmware.
+  Wire.begin(OLED_SDA, OLED_SCL);
+  Wire.setTimeout(50);
   if(!DISPLAY_BEGIN()) {
     Serial.println(F(ALLOC_FAILED_MSG));
   }
@@ -965,6 +977,15 @@ applyButtonPins();
   menuBtn.attach(MENU_BTN, INPUT_PULLUP);
   menuBtn.interval(25);
   menuBtn.setPressedState(LOW);
+
+#ifdef TARGET_ESP32C3
+  // Deep sleep resets the chip, so setup() runs on every wake. Re-arm the
+  // "go back to sleep if nothing happened" check so the C3 polls buttons in
+  // short windows instead of staying awake for the full sleep timeout.
+  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER) {
+    sleepPending = true;
+  }
+#endif
 }
 
 void loop() {
