@@ -10,6 +10,28 @@
 #include <WiFiUdp.h>
 #include <esp_sleep.h>
 
+// === ESP32-C3: free the encoder pins from UART0 ===
+// On ESP32-C3 the default UART0 pins are GPIO20/21, which this firmware uses
+// for the rotary encoder (ENCODER_CLK/DT). Calling Serial.begin() there drives
+// GPIO21 as a UART TX output and breaks the encoder's DT line -> quadrature
+// decode fails (the volume bar appears on rotation but never changes). The board
+// has no UART header (PC control/CFG is over WiFi UDP) and the console is
+// USB-CDC via log_e, so UART0 is unused on C3. Provide a no-op Serial so the
+// legacy Serial.* debug/CFG calls stay harmless instead of crashing.
+#ifdef TARGET_ESP32C3
+class NoopStream : public Print {
+public:
+  void begin(unsigned long) {}
+  void setTimeout(unsigned long) {}
+  int available() { return 0; }
+  String readStringUntil(char) { return String(); }
+  size_t write(uint8_t) override { return 1; }
+  size_t write(const uint8_t* b, size_t n) override { (void)b; return n; }
+};
+static NoopStream g_nullPrintC3;
+#define Serial g_nullPrintC3
+#endif
+
 // === Display driver abstraction (compile-time selection) ===
 // One of: SSD1306 (default), SH1106G (USE_SH1106), SH1107 (USE_SH1107).
 #ifdef USE_SH1107
