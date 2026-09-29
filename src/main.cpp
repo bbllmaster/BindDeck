@@ -15,9 +15,9 @@
 // for the rotary encoder (ENCODER_CLK/DT). Calling Serial.begin() there drives
 // GPIO21 as a UART TX output and breaks the encoder's DT line -> quadrature
 // decode fails (the volume bar appears on rotation but never changes). The board
-// has no UART header (PC control/CFG is over WiFi UDP) and the console is
-// USB-CDC via log_e, so UART0 is unused on C3. Provide a no-op Serial so the
-// legacy Serial.* debug/CFG calls stay harmless instead of crashing.
+// has no UART header; the console is USB-CDC (log_e) and PC CFG/control is over
+// WiFi UDP, so UART0 is unused on C3. Provide a no-op Serial so the legacy
+// Serial.* debug/CFG calls stay harmless instead of crashing.
 #ifdef TARGET_ESP32C3
 class NoopStream : public Print {
 public:
