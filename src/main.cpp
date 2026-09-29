@@ -80,21 +80,20 @@ Preferences preferences;
 #define MENU_BTN 4
 const int DEFAULT_SWITCH_PINS[8] = {13, 12, 14, 27, 32, 33, 25, 26};
 #else
-// ESP32-C3 (WROOM-02) embedded SPI flash occupies GPIO10 (SCLK), 11 (CS),
-// 12/13/14 (data). These are NOT general-purpose GPIO — driving them starves
-// the flash so the CPU can't fetch code, which trips TG1WDT_SYS_RST. Keep every
-// button/menu pin outside 10-14. GPIO18/19 = UART0, 20/21 = encoder, 4/5 = OLED,
-// all of which are also unavailable for buttons.
+// ESP32-C3 usable GPIOs (per board IO map): 0,1,2,3,4,5,6,7,8,9,10,20,21.
+// UNAVAILABLE: 11 (VDD_SPI / flash power), 12-17 (embedded flash IO lines),
+// 18/19 (USB-CDC console), so never assign those to buttons/encoder/OLED.
+// Pin budget: with flash(11-17)+USB(18/19) off-limits there are only 13 free
+// GPIOs for 8 buttons + menu + 3 encoder + 2 OLED = 14 functions, so the
+// rotary-push (ENCODER_SW) doubles as the menu button (common encoder design).
+// If the board has a SEPARATE menu button, set its real pin via CFG:PINS.
 #define ENCODER_CLK 20
 #define ENCODER_DT 21
 #define ENCODER_SW 1
 #define OLED_SDA 4
 #define OLED_SCL 5
-#define MENU_BTN 9
-// GPIO17 also stalls the C3 (flash-related line) like 12/13/14, so the 8th
-// button falls back to GPIO0. NOTE: these are flash-safe PLACEHOLDERS, not the
-// board's real button wiring — set the actual pins via CFG:PINS from the PC app.
-const int DEFAULT_SWITCH_PINS[8] = {2, 3, 6, 7, 8, 15, 16, 0};
+#define MENU_BTN 1   // shared with ENCODER_SW (rotary push = menu)
+const int DEFAULT_SWITCH_PINS[8] = {0, 2, 3, 6, 7, 8, 9, 10};
 #endif
 
 const int8_t enc_states[] = {0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0};
@@ -129,11 +128,9 @@ bool isValidButtonPin(int pin) {
 #ifdef TARGET_ESP32C3
   // ESP32-C3 only exposes GPIO 0-21.
   if (pin < 0 || pin > 21) return false;
-  // Embedded SPI-flash pins (WROOM-02): 10=SCLK, 11=CS, 12/13/14=data. Using
-  // them as GPIO starves the flash -> CPU stall -> TG1WDT_SYS_RST. A stale pin
-  // from an ESP32 build (e.g. 25/26/32/33) or a default that landed on a flash
-  // line is rejected here so loadConfig falls back to safe defaults.
-  if (pin >= 10 && pin <= 14) return false;
+  // Embedded flash occupies GPIO11 (VDD_SPI) and 12-17 (flash IO lines).
+  // Using them as GPIO starves the flash -> CPU stall -> TG1WDT_SYS_RST.
+  if (pin >= 11 && pin <= 17) return false;
 #else
   if (pin < 0 || pin > 39) return false;            // ESP32 has GPIO 0-39
 #endif
