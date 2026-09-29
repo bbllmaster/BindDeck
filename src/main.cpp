@@ -95,7 +95,8 @@ const int8_t enc_states[] = {0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0}
 volatile int encoderSteps = 0;
 volatile uint8_t old_AB = 0;
 
-void IRAM_ATTR readEncoder() {
+// Called from loop() to sample the encoder (polled, not interrupt-driven).
+void readEncoder() {
   old_AB <<= 2;
   uint8_t current = 0;
   if (digitalRead(ENCODER_CLK)) current |= 0x02;
@@ -982,9 +983,12 @@ void setup() {
   pinMode(ENCODER_DT, INPUT_PULLUP);
   pinMode(ENCODER_SW, INPUT_PULLUP);
   log_e("[DBG setup] enc pins ok"); delay(30);
-  attachInterrupt(digitalPinToInterrupt(ENCODER_CLK), readEncoder, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(ENCODER_DT), readEncoder, CHANGE);
-  log_e("[DBG setup] enc irq ok"); delay(30);
+  // Encoder is POLLED in loop() (readEncoder) rather than driven by
+  // interrupts. On ESP32-C3 the readEncoder ISR is IRAM_ATTR but calls
+  // digitalRead() (flash-resident), which is unsafe from an IRAM interrupt
+  // context and triggers an interrupt storm that starves the scheduler and
+  // trips the watchdog. Polling is robust.
+  log_e("[DBG setup] enc poll (no irq)"); delay(30);
 
   log_e("[DBG setup] applyPins..."); delay(30);
 applyButtonPins();
@@ -1063,6 +1067,9 @@ void loop() {
     }
 
     // --- Rotary Encoder ---
+    // Poll the encoder every loop iteration (replaces the old ISR). On C3 the
+    // ISR called digitalRead() from IRAM and stormed interrupts.
+    readEncoder();
     static int lastEncoderSteps = 0;
     if (encoderSteps / 4 != lastEncoderSteps / 4) {
       noInterrupts();
