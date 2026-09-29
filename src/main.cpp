@@ -9,6 +9,7 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <esp_sleep.h>
+#include <esp_timer.h>
 
 // === ESP32-C3: free the encoder pins from UART0 ===
 // On ESP32-C3 the default UART0 pins are GPIO20/21, which this firmware uses
@@ -122,7 +123,10 @@ const int8_t enc_states[] = {0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0}
 volatile int encoderSteps = 0;
 volatile uint8_t old_AB = 0;
 
-// Called from loop() to sample the encoder (polled, not interrupt-driven).
+// Called to sample the encoder. On ESP32-C3 this is driven by a 1 kHz
+// esp_timer (see encoderTimerCb) so quadrature edges are never missed by the
+// slow main loop. It only does digitalRead() + integer math, so it is safe to
+// call from the esp_timer task context (default dispatch is ESP_TIMER_TASK).
 void readEncoder() {
   old_AB <<= 2;
   uint8_t current = 0;
@@ -131,6 +135,17 @@ void readEncoder() {
   old_AB |= (current & 0x03);
   encoderSteps += enc_states[(old_AB & 0x0f)];
 }
+
+#ifdef TARGET_ESP32C3
+// High-rate sampler: runs in the esp_timer task (NOT an IRAM ISR), so there is
+// no flash/IRAM hazard and no interrupt storm. 1 kHz is far above any human
+// EC11 rotation speed, guaranteeing every detent transition is captured.
+static esp_timer_handle_t s_encoderTimer = NULL;
+static void encoderTimerCb(void* arg) {
+  (void)arg;
+  readEncoder();
+}
+#endif
 
 // Pins
 // Default button GPIOs; overridable at runtime via CFG:PINS: from the PC app.
@@ -1019,12 +1034,26 @@ void setup() {
   pinMode(ENCODER_DT, INPUT_PULLUP);
   pinMode(ENCODER_SW, INPUT_PULLUP);
   log_e("[DBG setup] enc pins ok"); delay(30);
-  // Encoder is POLLED in loop() (readEncoder) rather than driven by
-  // interrupts. On ESP32-C3 the readEncoder ISR is IRAM_ATTR but calls
-  // digitalRead() (flash-resident), which is unsafe from an IRAM interrupt
-  // context and triggers an interrupt storm that starves the scheduler and
-  // trips the watchdog. Polling is robust.
-  log_e("[DBG setup] enc poll (no irq)"); delay(30);
+#ifdef TARGET_ESP32C3
+  // Encoder is sampled by a 1 kHz esp_timer (encoderTimerCb) instead of once
+  // per loop(). The main loop does OLED redraws + BLE and runs every ~tens of
+  // ms, which previously missed quadrature transitions on fast rotation and
+  // made the volume bar appear but never change. Sampling at 1 kHz captures
+  // every edge. The timer runs in a task context, so digitalRead() is safe.
+  if (s_encoderTimer == NULL) {
+    esp_timer_create_args_t encTimerCfg = {
+      .callback = &encoderTimerCb,
+      .arg = NULL,
+      .dispatch_method = ESP_TIMER_TASK,
+      .name = "enc"
+    };
+    esp_timer_create(&encTimerCfg, &s_encoderTimer);
+    esp_timer_start_periodic(s_encoderTimer, 1000); // 1000 us = 1 ms
+  }
+  log_e("[DBG setup] enc timer 1kHz started"); delay(30);
+#else
+  log_e("[DBG setup] enc poll (loop)"); delay(30);
+#endif
 
   log_e("[DBG setup] applyPins..."); delay(30);
 applyButtonPins();
@@ -1103,9 +1132,12 @@ void loop() {
     }
 
     // --- Rotary Encoder ---
-    // Poll the encoder every loop iteration (replaces the old ISR). On C3 the
-    // ISR called digitalRead() from IRAM and stormed interrupts.
+    // On ESP32-C3, encoderSteps is updated by the 1 kHz esp_timer
+    // (encoderTimerCb). On classic ESP32 there is no timer; keep polling here
+    // so its behavior is unchanged from before the C3 timer rework.
+#ifndef TARGET_ESP32C3
     readEncoder();
+#endif
     static int lastEncoderSteps = 0;
     if (encoderSteps / 4 != lastEncoderSteps / 4) {
       noInterrupts();
@@ -1133,6 +1165,17 @@ void loop() {
       currentState = STATE_ACTION;
       actionStartTime = millis();
     }
+
+#ifdef TARGET_ESP32C3
+    // Diagnostic: confirm the encoder counter actually moves when rotating.
+    // If steps stays 0 while you turn the knob, the EC11 is NOT on GPIO20/21
+    // (wrong board wiring) rather than a decode bug.
+    static unsigned long lastEncLog = 0;
+    if (millis() - lastEncLog > 1000) {
+      log_e("[DBG enc] steps=%d vol=%d", encoderSteps, visualVolume);
+      lastEncLog = millis();
+    }
+#endif
     
     if (currentState == STATE_IDLE) {
       if (currentIdleScreen == 0) {
