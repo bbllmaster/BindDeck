@@ -273,10 +273,12 @@ void loadConfig() {
     keyTexts[i] = preferences.getString(key, "");
   }
   if (encMode < 0 || encMode > 5) encMode = 0;
-  preferences.end();
 
   // Button GPIOs: read persisted values, fall back to defaults if invalid
-  // (e.g. after a bad CFG:PINS: or a Preferences wipe).
+  // (e.g. after a bad CFG:PINS: or a Preferences wipe). Keep the NVS handle
+  // open — calling preferences.end() here and then keep reading on the closed
+  // handle is a use-after-close (the reads silently return defaults, and the
+  // double end() is just wrong). Close ONCE at the very end.
   int loaded[8];
   bool anyInvalid = false;
   for(int i=0; i<8; i++) {
@@ -295,10 +297,10 @@ void loadConfig() {
   } else {
     for (int i = 0; i < 8; i++) switchPins[i] = loaded[i];
   }
-  preferences.end();
   sleepEnabled = preferences.getBool("sleepEnabled", true);
   sleepTimeoutMs = preferences.getULong("sleepTimeoutMs", 300000);
   if (sleepTimeoutMs < 60000) sleepTimeoutMs = 300000;
+  preferences.end();
   Serial.print("[DBG load_config] switchPins={");
   for (int i = 0; i < 8; i++) { Serial.print(switchPins[i]); if (i < 7) Serial.print(","); }
   Serial.println("}");
@@ -938,9 +940,12 @@ void loopWiFi() {
 void setup() {
   Serial.begin(115200);
   Serial.setTimeout(10);
+  Serial.println("[DBG setup] serial ok"); delay(30);
   loadConfig();  // populates switchPins[] from Preferences (or defaults)
+  Serial.println("[DBG setup] loadConfig ok"); delay(30);
 
   setupWiFi();
+  Serial.println("[DBG setup] wifi ok"); delay(30);
 
   // CRITICAL for ESP32-C3: the devkit's default I2C pins are GPIO8/9, but this
   // board wires the OLED to OLED_SDA/OLED_SCL (4/5 on C3). Passing them
@@ -953,6 +958,7 @@ void setup() {
   if(!DISPLAY_BEGIN()) {
     Serial.println(F(ALLOC_FAILED_MSG));
   }
+  Serial.println("[DBG setup] display ok"); delay(30);
   display.setRotation(DISPLAY_ROTATION);
 
   SET_BRIGHTNESS(brightness);
@@ -962,8 +968,11 @@ void setup() {
   eyes.begin(SCREEN_WIDTH, SCREEN_HEIGHT, 30);
   eyes.setAutoblinker(true, 2, 2);
   eyes.setIdleMode(true, 1, 2);
+  Serial.println("[DBG setup] eyes ok"); delay(30);
   
+  Serial.println("[DBG setup] ble begin..."); delay(30);
   bleKeyboard.begin();
+  Serial.println("[DBG setup] ble ok"); delay(30);
   
   // Encoder setup
   pinMode(ENCODER_CLK, INPUT_PULLUP);
@@ -973,10 +982,13 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(ENCODER_DT), readEncoder, CHANGE);
   
 applyButtonPins();
+  Serial.println("[DBG setup] buttons ok"); delay(30);
 
   menuBtn.attach(MENU_BTN, INPUT_PULLUP);
   menuBtn.interval(25);
   menuBtn.setPressedState(LOW);
+
+  Serial.println("[DBG setup] DONE - entering loop"); delay(30);
 
 #ifdef TARGET_ESP32C3
   // Deep sleep resets the chip, so setup() runs on every wake. Re-arm the
@@ -989,6 +1001,8 @@ applyButtonPins();
 }
 
 void loop() {
+  static bool _loopStarted = false;
+  if (!_loopStarted) { _loopStarted = true; Serial.println("[DBG loop] started"); delay(30); }
   for(int i = 0; i < 8; i++) switches[i].update();
   menuBtn.update();
   
