@@ -80,15 +80,18 @@ Preferences preferences;
 #define MENU_BTN 4
 const int DEFAULT_SWITCH_PINS[8] = {13, 12, 14, 27, 32, 33, 25, 26};
 #else
-// ESP32-C3 DevKitC-02: GPIO18/19 are UART0 (USB serial), reserved.
-// GPIO6-11 are SPI flash, not usable. GPIO0/2/3 are strapping.
+// ESP32-C3 (WROOM-02) embedded SPI flash occupies GPIO10 (SCLK), 11 (CS),
+// 12/13/14 (data). These are NOT general-purpose GPIO — driving them starves
+// the flash so the CPU can't fetch code, which trips TG1WDT_SYS_RST. Keep every
+// button/menu pin outside 10-14. GPIO18/19 = UART0, 20/21 = encoder, 4/5 = OLED,
+// all of which are also unavailable for buttons.
 #define ENCODER_CLK 20
 #define ENCODER_DT 21
 #define ENCODER_SW 1
 #define OLED_SDA 4
 #define OLED_SCL 5
-#define MENU_BTN 10
-const int DEFAULT_SWITCH_PINS[8] = {12, 13, 14, 15, 16, 17, 2, 3};
+#define MENU_BTN 9
+const int DEFAULT_SWITCH_PINS[8] = {2, 3, 6, 7, 8, 15, 16, 17};
 #endif
 
 const int8_t enc_states[] = {0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0};
@@ -121,14 +124,13 @@ const int NUM_OCCUPIED = sizeof(OCCUPIED_PINS) / sizeof(OCCUPIED_PINS[0]);
 
 bool isValidButtonPin(int pin) {
 #ifdef TARGET_ESP32C3
-  // ESP32-C3 only exposes GPIO 0-21 (and some are reserved/strapping).
-  // Reject anything outside this range — a stale pin from an ESP32 build
-  // (e.g. 25/26/32/33) would pass the old >39 check but then hang in
-  // pinMode()/digitalRead() on a non-existent GPIO and trip the watchdog.
+  // ESP32-C3 only exposes GPIO 0-21.
   if (pin < 0 || pin > 21) return false;
-  // Strapping / special pins that must not be used as buttons on C3.
-  if (pin == 0 || pin == 8 || pin == 9 || pin == 11 || pin == 20 || pin == 21)
-    return false;
+  // Embedded SPI-flash pins (WROOM-02): 10=SCLK, 11=CS, 12/13/14=data. Using
+  // them as GPIO starves the flash -> CPU stall -> TG1WDT_SYS_RST. A stale pin
+  // from an ESP32 build (e.g. 25/26/32/33) or a default that landed on a flash
+  // line is rejected here so loadConfig falls back to safe defaults.
+  if (pin >= 10 && pin <= 14) return false;
 #else
   if (pin < 0 || pin > 39) return false;            // ESP32 has GPIO 0-39
 #endif
