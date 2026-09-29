@@ -256,7 +256,7 @@ void loadConfig() {
   // mode so the library creates the namespace on first use.
   if (!preferences.begin("binddeck", false)) {
     preferences.end();
-    log_w("[DBG load_config] NVS begin failed, using defaults");
+    log_e("[DBG load_config] NVS begin failed, using defaults");
     animMode = 0; encMode = 0; brightness = 255;
     for (int i = 0; i < 8; i++) { keyAnims[i] = -1; keyTexts[i] = ""; }
     for (int i = 0; i < 8; i++) switchPins[i] = DEFAULT_SWITCH_PINS[i];
@@ -400,7 +400,7 @@ void processCommand(String data) {
       for (int i = 0; i < 8; i++) { Serial.print(switchPins[i]); if (i < 7) Serial.print(","); }
       Serial.println("}");
     } else {
-      log_w("[DBG CFG:PINS] REJECTED — keeping previous switchPins");
+      log_e("[DBG CFG:PINS] REJECTED — keeping previous switchPins");
     }
     // Invalid payloads are silently ignored — device keeps its last valid config.
 } else if (data.startsWith("CFG:WIFI:")) {
@@ -941,12 +941,13 @@ void loopWiFi() {
 void setup() {
   Serial.begin(115200);
   Serial.setTimeout(10);
-  log_w("[DBG setup] serial ok"); delay(30);
+  delay(1000);  // let the USB-CDC console enumerate before emitting diagnostics
+  log_e("[DBG setup] serial ok"); delay(30);
   loadConfig();  // populates switchPins[] from Preferences (or defaults)
-  log_w("[DBG setup] loadConfig ok"); delay(30);
+  log_e("[DBG setup] loadConfig ok"); delay(30);
 
   setupWiFi();
-  log_w("[DBG setup] wifi ok"); delay(30);
+  log_e("[DBG setup] wifi ok"); delay(30);
 
   // CRITICAL for ESP32-C3: the devkit's default I2C pins are GPIO8/9, but this
   // board wires the OLED to OLED_SDA/OLED_SCL (4/5 on C3). Passing them
@@ -959,7 +960,7 @@ void setup() {
   if(!DISPLAY_BEGIN()) {
     Serial.println(F(ALLOC_FAILED_MSG));
   }
-  log_w("[DBG setup] display ok"); delay(30);
+  log_e("[DBG setup] display ok"); delay(30);
   display.setRotation(DISPLAY_ROTATION);
 
   SET_BRIGHTNESS(brightness);
@@ -969,11 +970,11 @@ void setup() {
   eyes.begin(SCREEN_WIDTH, SCREEN_HEIGHT, 30);
   eyes.setAutoblinker(true, 2, 2);
   eyes.setIdleMode(true, 1, 2);
-  log_w("[DBG setup] eyes ok"); delay(30);
+  log_e("[DBG setup] eyes ok"); delay(30);
   
-  log_w("[DBG setup] ble begin..."); delay(30);
+  log_e("[DBG setup] ble begin..."); delay(30);
   bleKeyboard.begin();
-  log_w("[DBG setup] ble ok"); delay(30);
+  log_e("[DBG setup] ble ok"); delay(30);
   
   // Encoder setup
   pinMode(ENCODER_CLK, INPUT_PULLUP);
@@ -983,13 +984,13 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(ENCODER_DT), readEncoder, CHANGE);
   
 applyButtonPins();
-  log_w("[DBG setup] buttons ok"); delay(30);
+  log_e("[DBG setup] buttons ok"); delay(30);
 
   menuBtn.attach(MENU_BTN, INPUT_PULLUP);
   menuBtn.interval(25);
   menuBtn.setPressedState(LOW);
 
-  log_w("[DBG setup] DONE - entering loop"); delay(30);
+  log_e("[DBG setup] DONE - entering loop"); delay(30);
 
 #ifdef TARGET_ESP32C3
   // Deep sleep resets the chip, so setup() runs on every wake. Re-arm the
@@ -1003,7 +1004,7 @@ applyButtonPins();
 
 void loop() {
   static bool _loopStarted = false;
-  if (!_loopStarted) { _loopStarted = true; log_w("[DBG loop] started"); delay(30); }
+  if (!_loopStarted) { _loopStarted = true; log_e("[DBG loop] started"); delay(30); }
   for(int i = 0; i < 8; i++) switches[i].update();
   menuBtn.update();
   
@@ -1119,14 +1120,14 @@ void loop() {
       // goes back to sleep if nothing pressed. Less power cut than ext0 but
       // the only deep-sleep GPIO-free option on C3.
       esp_sleep_enable_timer_wakeup(5000000); // 5 s
-      log_w("[DBG sleep] entering deep sleep (timer wake 5s)...");
+      log_e("[DBG sleep] entering deep sleep (timer wake 5s)...");
 #else
       // ESP32 (original): ext1 only supports ALL_LOW or ANY_HIGH. Buttons are
       // normally HIGH (pull-up) and go LOW when pressed, so we use ext0 on the
       // menu button as the primary wake source.
       pinMode(MENU_BTN, INPUT_PULLUP);
       esp_sleep_enable_ext0_wakeup((gpio_num_t)MENU_BTN, 0);
-      log_w("[DBG sleep] entering deep sleep (wake on MENU_BTN)...");
+      log_e("[DBG sleep] entering deep sleep (wake on MENU_BTN)...");
 #endif
       delay(100);
       esp_deep_sleep_start();
@@ -1153,7 +1154,7 @@ void loop() {
         display.display();
         SET_BRIGHTNESS(0);
         esp_sleep_enable_timer_wakeup(5000000);
-        log_w("[DBG sleep] timer wake, no activity — back to sleep");
+        log_e("[DBG sleep] timer wake, no activity — back to sleep");
         delay(100);
         esp_deep_sleep_start();
       }
