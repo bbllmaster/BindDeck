@@ -685,7 +685,7 @@ async function onDeviceConnectionChange() {
     await persistConfig();
 }
 
-async function saveSettings(silent = false) {
+async function saveSettings(silent = false, force = false) {
     if (currentKey) {
         config.keys[currentKey] = {
             type: document.getElementById('actionType').value,
@@ -714,7 +714,11 @@ async function saveSettings(silent = false) {
     config.app.closeMode = document.getElementById('closeMode').value;
 
     try {
-        await fetch('/api/config', {
+        // force=true (the header "Sync to Device" button) makes the server push
+        // the whole config, not just the values that changed on disk - so a
+        // setting that never reached the device can always be re-sent. Same
+        // short-circuit that saveButtonPins works around via /api/sync_pins.
+        await fetch('/api/config' + (force ? '?force=1' : ''), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(config)
@@ -863,7 +867,7 @@ document.getElementById('btn-delete').addEventListener('click', () => {
     setTimeout(() => delBtn.innerText = originalText, 1000);
 });
 
-document.getElementById('btn-sync-header').addEventListener('click', () => saveSettings(false));
+document.getElementById('btn-sync-header').addEventListener('click', () => saveSettings(false, true));
 
 // Panel Drag and Drop
 const panels = document.querySelectorAll('.main-layout > .panel');

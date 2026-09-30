@@ -323,34 +323,44 @@ def send_to_device(cmd):
     channel."""
     payload = (cmd + "\n").encode('utf-8')
     sent = False
+    via = []
     try:
         udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         udp_socket.sendto(payload, ('255.255.255.255', 4210))
         sent = True
+        via.append("udp-bcast")
     except Exception as e:
         print("UDP broadcast send error:", e)
     for bcast in get_broadcast_ips():
         try:
             udp_socket.sendto(payload, (bcast, 4210))
             sent = True
+            via.append(f"udp:{bcast}")
         except Exception:
             pass
     if device_ip:
         try:
             udp_socket.sendto(payload, (device_ip, 4210))
             sent = True
+            via.append(f"udp:{device_ip}")
         except Exception:
             pass
     if serial_port and serial_port.is_open:
         try:
             serial_port.write(payload)
             sent = True
+            via.append("serial")
         except Exception as e:
             print("Serial send error:", e)
     # BLE config channel: the same CFG:/CMD: lines over the existing BLE link,
     # so the device can be configured with no WiFi at all.
     if ble_link_obj is not None and ble_link_obj.send(cmd):
         sent = True
+        via.append("ble")
+    # Log config traffic (not the high-rate C:..G:.. telemetry), so it is
+    # obvious which channel a command actually left through.
+    if cmd.startswith(("CFG:", "CMD:")):
+        print(f"[cfg] {cmd} -> {', '.join(via) if via else 'NOTHING (no channel available)'}")
     return sent
 
 
@@ -655,29 +665,37 @@ def api_config():
             try:
                 new_esp32 = new_cfg.get("esp32", {})
                 new_keys = new_cfg.get("keys", {})
+
+                # force=1 ("Sync to Device" in the header) pushes the whole
+                # config even when nothing differs on disk - otherwise a value
+                # that was saved earlier but never reached the device stays
+                # stuck, because the old==new check skips it forever.
+                force = request.args.get("force") == "1"
+                if force:
+                    print("[cfg] forced full sync")
                 
                 anim = new_esp32.get("animMode", 0)
                 if anim is None: anim = 0
-                if str(old_esp32.get("animMode", "")) != str(anim):
+                if force or str(old_esp32.get("animMode", "")) != str(anim):
                     send_to_device(f"CFG:ANIM:{anim}")
                     time.sleep(0.1)
 
                 enc = new_esp32.get("encMode", 0)
                 if enc is None: enc = 0
-                if str(old_esp32.get("encMode", "")) != str(enc):
+                if force or str(old_esp32.get("encMode", "")) != str(enc):
                     send_to_device(f"CFG:ENC:{enc}")
                     time.sleep(0.1)
 
                 brt = new_esp32.get("brightness", 255)
                 if brt is None: brt = 255
-                if str(old_esp32.get("brightness", "")) != str(brt):
+                if force or str(old_esp32.get("brightness", "")) != str(brt):
                     send_to_device(f"CFG:BRIGHT:{brt}")
                     time.sleep(0.1)
 
                 # Sleep mode: CFG:SLEEP:<enabled>,<timeout_minutes>
                 sleep_enabled = new_esp32.get("sleepEnabled", True)
                 sleep_timeout = new_esp32.get("sleepTimeout", 5)
-                if str(old_esp32.get("sleepEnabled", "")) != str(sleep_enabled) or \
+                if force or str(old_esp32.get("sleepEnabled", "")) != str(sleep_enabled) or \
                    str(old_esp32.get("sleepTimeout", "")) != str(sleep_timeout):
                     send_to_device(f"CFG:SLEEP:{int(bool(sleep_enabled))},{int(sleep_timeout)}")
                     print(f"[DBG CFG:SLEEP] SENT -> enabled={sleep_enabled} timeout={sleep_timeout}m")
@@ -687,7 +705,7 @@ def api_config():
                 new_pins = new_esp32.get("pins")
                 old_pins = old_esp32.get("pins")
                 print(f"[DBG CFG:PINS] old_pins={old_pins!r} new_pins={new_pins!r}")
-                if new_pins and old_pins and str(new_pins) != str(old_pins):
+                if force or (new_pins and old_pins and str(new_pins) != str(old_pins)):
                     if _valid_pin_set(new_pins):
                         pins_str = ",".join(str(int(p)) for p in new_pins)
                         send_to_device(f"CFG:PINS:{pins_str}")
@@ -702,7 +720,7 @@ def api_config():
                 for i in range(13, 22):
                     key_anim = new_keys.get(str(i), {}).get("anim", -1)
                     old_anim = old_keys.get(str(i), {}).get("anim", -1)
-                    if str(key_anim) != str(old_anim): changed_anims = True
+                    if force or str(key_anim) != str(old_anim): changed_anims = True
                     kb_anims.append(str(key_anim))
                 
                 if changed_anims:
@@ -714,7 +732,7 @@ def api_config():
                 for i in range(13, 22):
                     disp_text = new_keys.get(str(i), {}).get("dispText", "")
                     old_text = old_keys.get(str(i), {}).get("dispText", "")
-                    if str(disp_text) != str(old_text):
+                    if force or str(disp_text) != str(old_text):
                         idx = i - 13
                         send_to_device(f"CFG:TXT:{idx}:{disp_text}")
                         time.sleep(0.1)
