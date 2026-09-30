@@ -17,16 +17,7 @@ error; we pair on demand and retry once.
 
 import asyncio
 import threading
-
-BLEAK_IMPORT_ERROR = None
-try:
-    from bleak import BleakClient, BleakScanner
-    from bleak.exc import BleakGATTProtocolError
-
-    BLEAK_AVAILABLE = True
-except Exception as _e:  # bleak not installed - app still runs on WiFi/serial
-    BLEAK_AVAILABLE = False
-    BLEAK_IMPORT_ERROR = f"{type(_e).__name__}: {_e}"
+import traceback
 
 SVC = "b1d3c0de-0001-4a5b-9c6d-1a2b3c4d5e6f"
 RX = "b1d3c0de-0002-4a5b-9c6d-1a2b3c4d5e6f"
@@ -35,6 +26,38 @@ TX = "b1d3c0de-0003-4a5b-9c6d-1a2b3c4d5e6f"
 DEVICE_NAME = "BindDeck"
 SCAN_TIMEOUT = 10.0
 RECONNECT_DELAY = 3.0
+
+# bleak is imported lazily (see _load_bleak) rather than at module import time:
+# importing it once the app's own imports have all settled avoids ordering
+# clashes, and a failure is reported with a full traceback instead of being
+# silently swallowed.
+_BleakClient = None
+_BleakScanner = None
+_BleakGATTProtocolError = None
+_BLEAK_ERROR = None
+_BLEAK_TRACEBACK = None
+
+
+def _load_bleak():
+    """Import bleak on first use. Returns True when it is usable."""
+    global _BleakClient, _BleakScanner, _BleakGATTProtocolError
+    global _BLEAK_ERROR, _BLEAK_TRACEBACK
+    if _BleakClient is not None:
+        return True
+    try:
+        from bleak import BleakClient, BleakScanner
+        from bleak.exc import BleakGATTProtocolError
+
+        _BleakClient = BleakClient
+        _BleakScanner = BleakScanner
+        _BleakGATTProtocolError = BleakGATTProtocolError
+        _BLEAK_ERROR = None
+        _BLEAK_TRACEBACK = None
+        return True
+    except Exception as e:  # noqa: BLE001
+        _BLEAK_ERROR = f"{type(e).__name__}: {e}"
+        _BLEAK_TRACEBACK = traceback.format_exc()
+        return False
 
 
 def _is_security_error(err) -> bool:
@@ -54,7 +77,15 @@ class BleLink:
     # ---- thread-safe public API -------------------------------------------
     @property
     def available(self) -> bool:
-        return BLEAK_AVAILABLE
+        return _BleakClient is not None
+
+    @property
+    def error(self):
+        return _BLEAK_ERROR
+
+    @property
+    def error_traceback(self):
+        return _BLEAK_TRACEBACK
 
     @property
     def connected(self) -> bool:
@@ -67,7 +98,8 @@ class BleLink:
             return self._address
 
     def start(self) -> bool:
-        if not BLEAK_AVAILABLE:
+        """Load bleak and start the link thread. False when bleak is unusable."""
+        if not _load_bleak():
             return False
         threading.Thread(target=self._thread_main, daemon=True, name="ble-link").start()
         return True
@@ -110,19 +142,19 @@ class BleLink:
             addr = self._address
         if addr:
             try:
-                client = BleakClient(addr, timeout=20.0)
+                client = _BleakClient(addr, timeout=20.0)
                 await client.connect()
                 if client.is_connected:
                     return client
                 await client.disconnect()
             except Exception as e:  # noqa: BLE001
                 print("[ble] cached address failed:", e)
-        dev = await BleakScanner.find_device_by_name(DEVICE_NAME, timeout=SCAN_TIMEOUT)
+        dev = await _BleakScanner.find_device_by_name(DEVICE_NAME, timeout=SCAN_TIMEOUT)
         if dev is None:
             return None
         with self._lock:
             self._address = dev.address
-        client = BleakClient(dev, timeout=20.0)
+        client = _BleakClient(dev, timeout=20.0)
         await client.connect()
         return client if client.is_connected else None
 
@@ -138,7 +170,7 @@ class BleLink:
 
         try:
             await client.start_notify(TX, _tx)
-        except BleakGATTProtocolError as e:
+        except _BleakGATTProtocolError as e:
             if not _is_security_error(e):
                 raise
             print("[ble] notify needs security - pairing ...")
@@ -149,7 +181,7 @@ class BleLink:
     async def _write(self, client, cmd: str):
         try:
             await client.write_gatt_char(RX, cmd.encode(), response=True)
-        except BleakGATTProtocolError as e:
+        except _BleakGATTProtocolError as e:
             if not _is_security_error(e):
                 raise
             print("[ble] write needs security - pairing ...")
