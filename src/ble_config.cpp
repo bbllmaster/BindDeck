@@ -33,14 +33,16 @@ bool BleConfigService::begin(NimBLEServer* server) {
   if (!svc) return false;
 
   // Deliberately NOT encrypted/authenticated. Requiring security here made the
-  // channel unusable from any client that had not already bonded (the OS
-  // reports "Insufficient Authentication" on write), which is exactly what we
-  // hit from both the PC and a phone. The config channel is short-range and
-  // only writes preferences, so it stays open; tighten later if needed.
+  // Encrypted-only: the device bonds on pairing (the same bond HID uses), so a
+  // client must be bonded/encrypted to read or write the config channel. The
+  // earlier "Insufficient Authentication" failure was simply an *unbonded*
+  // client - pair it first and this works. NOT _AUTHEN/MITM: the board has no
+  // display/keypad, so authenticated pairing can never be satisfied.
   NimBLECharacteristic* rx = svc->createCharacteristic(
-      BLE_CFG_RX_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR, 512);
+      BLE_CFG_RX_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_ENC, 512);
   NimBLECharacteristic* tx = svc->createCharacteristic(
-      BLE_CFG_TX_UUID, NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::READ, 512);
+      BLE_CFG_TX_UUID,
+      NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::READ_ENC, 512);
   rx->setCallbacks(new CfgRxCallbacks());
 
   svc->start();

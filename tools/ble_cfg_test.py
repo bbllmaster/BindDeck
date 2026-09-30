@@ -35,6 +35,12 @@ DEVICE_NAME = "BindDeck"
 SCAN_SECONDS = 10.0
 
 
+def _needs_security(err: str) -> bool:
+    """True if a GATT error means the link must be encrypted/authenticated."""
+    e = err.lower()
+    return "nsum" in e or "uthentic" in e or "ncrypt" in e
+
+
 async def scan() -> dict:
     print(f"[1/5] scanning {SCAN_SECONDS:.0f}s ...", flush=True)
     seen = {}
@@ -75,24 +81,38 @@ async def run(address: str, cmds: list) -> None:
         def on_tx(_c, data: bytearray) -> None:
             print(f"      <- {data.decode(errors='replace')}", flush=True)
 
-        print(f"[5/5] subscribing TX + sending {len(cmds)} command(s)", flush=True)
-        await client.start_notify(TX, on_tx)
-        for cmd in cmds:
-            print(f"      -> {cmd}", flush=True)
+        # The config characteristics are encrypted-only, so an unbonded client
+        # gets a security error. Pair on demand and retry once.
+        for attempt in (1, 2):
             try:
-                await client.write_gatt_char(RX, cmd.encode(), response=True)
+                print(f"[5/5] subscribing TX + sending {len(cmds)} command(s)"
+                      + (" (retry)" if attempt == 2 else ""), flush=True)
+                await client.start_notify(TX, on_tx)
+                for cmd in cmds:
+                    print(f"      -> {cmd}", flush=True)
+                    await client.write_gatt_char(RX, cmd.encode(), response=True)
+                    await asyncio.sleep(0.6)
+                print("      waiting 3s for notifications ...", flush=True)
+                await asyncio.sleep(3.0)
+                await client.stop_notify(TX)
+                break
             except BleakGATTProtocolError as e:
-                print(f"      write FAILED: {e}", flush=True)
-                print("      (the characteristic's security requirement is not met -", flush=True)
-                print("       flash newer firmware, or pair the device first)", flush=True)
+                if attempt == 1 and _needs_security(str(e)):
+                    print(f"      needs encryption ({e}) - pairing ...", flush=True)
+                    try:
+                        await client.pair()
+                        print("      paired; retrying", flush=True)
+                    except Exception as pe:  # noqa: BLE001
+                        print(f"      pair FAILED: {type(pe).__name__}: {pe}", flush=True)
+                        print("      -> pair the device in the OS first, or flash app-only", flush=True)
+                        print("         updates (they keep the existing bond)", flush=True)
+                        break
+                    continue
+                print(f"      FAILED: {e}", flush=True)
                 break
             except Exception as e:  # noqa: BLE001 - surface anything else clearly
-                print(f"      write error: {type(e).__name__}: {e}", flush=True)
+                print(f"      error: {type(e).__name__}: {e}", flush=True)
                 break
-            await asyncio.sleep(0.6)
-        print("      waiting 3s for notifications ...", flush=True)
-        await asyncio.sleep(3.0)
-        await client.stop_notify(TX)
     finally:
         await client.disconnect()
         print("done.", flush=True)
