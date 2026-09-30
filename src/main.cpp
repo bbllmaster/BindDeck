@@ -13,6 +13,7 @@
 #include <Update.h>        // OTA: write the inactive app slot over WiFi
 #include <esp_sleep.h>
 #include <esp_timer.h>
+#include <nvs_flash.h>     // robust NVS bring-up (see ensureNvs)
 
 // === ESP32-C3: free the encoder pins from UART0 ===
 // On ESP32-C3 the default UART0 pins are GPIO20/21, which this firmware uses
@@ -1339,11 +1340,50 @@ void loopWiFi() {
   }
 }
 
+// Robust NVS bring-up.
+//
+// A device that was previously flashed with firmware built against a different
+// NVS format/layout (e.g. the pre-OTA builds that used huge_app.csv, or an
+// older esp-idf/arduino base) can leave the NVS partition in a state where
+// nvs_flash_init() returns ESP_ERR_NVS_NEW_VERSION_FOUND or
+// ESP_ERR_NVS_NO_FREE_PAGES. The Arduino core only logs this and bails, so NVS
+// stays UNINITIALIZED. NimBLE's init() then fails to store its random static
+// address and ESP_ERROR_CHECK->abort()s, which the bootloader turns into an
+// infinite reboot loop ("Failed to initialize NVS! Error: 261" -> "ESP_ERROR_CHECK
+// failed: 0x105" at NimBLEDevice.cpp). We recover here by erasing the NVS
+// partition once and re-initializing, so the device self-heals instead of
+// bricking. On a healthy boot nvs_flash_init() returns ESP_OK and we touch
+// nothing (so normal OTA updates never wipe the user's config).
+//
+// If NVS truly can't be brought up (e.g. a missing/damaged partition), we set
+// g_nvsOk=false so setup() can skip BLE and degrade gracefully (OLED + WiFi
+// config-mode/OTA still work) rather than looping.
+static bool g_nvsOk = false;
+static void ensureNvs() {
+  esp_err_t err = nvs_flash_init();
+  if (err == ESP_OK) { g_nvsOk = true; return; }
+  log_e("[nvs] init failed (%d), erasing partition and retrying", (int)err);
+  if (nvs_flash_erase() == ESP_OK) {
+    err = nvs_flash_init();
+    log_e("[nvs] re-init after erase: %d", (int)err);
+    g_nvsOk = (err == ESP_OK);
+  } else {
+    log_e("[nvs] erase failed - NVS unavailable this boot (BLE disabled)");
+    g_nvsOk = false;
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   Serial.setTimeout(10);
   delay(1000);  // let the USB-CDC console enumerate before emitting diagnostics
   log_e("[DBG setup] serial ok"); delay(30);
+
+  // Bring up NVS *before* anything that touches Preferences or NimBLE. A
+  // corrupt/incompatible NVS left by an older build must be healed here or the
+  // later NimBLE init aborts and the device reboots forever.
+  ensureNvs();
+
   loadConfig();  // populates switchPins[] from Preferences (or defaults)
   log_e("[DBG setup] loadConfig ok"); delay(30);
 
@@ -1421,8 +1461,14 @@ void setup() {
     processCommand(cmd);
   };
   log_e("[DBG setup] ble begin..."); delay(30);
-  bleKeyboard.begin();
-  log_e("[DBG setup] ble ok"); delay(30);
+  if (g_nvsOk) {
+    bleKeyboard.begin();
+    log_e("[DBG setup] ble ok"); delay(30);
+  } else {
+    // Last-resort guard: if NVS could not be brought up we skip BLE so the
+    // device still boots (OLED + WiFi config-mode/OTA work) instead of looping.
+    log_e("[DBG setup] BLE SKIPPED (NVS unavailable) - keyboard link down, recover via config-mode OTA");
+  }
 
   // Encoder setup
   log_e("[DBG setup] enc pins..."); delay(30);
