@@ -645,10 +645,12 @@ def api_config():
         config = new_cfg
         save_config()
         
-        # Send over USB serial when open, over Wi-Fi when a device IP is known,
-        # or unconditionally when the connection is Wi-Fi (the device receives
-        # the broadcast on UDP 4210 even before it has reported its IP back).
+        # Send over USB serial when open, over the BLE config link when it is
+        # connected, over Wi-Fi when a device IP is known, or unconditionally
+        # when the connection is Wi-Fi (the device receives the broadcast on
+        # UDP 4210 even before it has reported its IP back).
         if serial_port and serial_port.is_open or device_ip or \
+           (ble_link_obj is not None and ble_link_obj.connected) or \
            new_cfg.get("app", {}).get("connection_type") == "wifi":
             try:
                 new_esp32 = new_cfg.get("esp32", {})
@@ -896,7 +898,10 @@ def api_status():
     conn_type = config.get("app", {}).get("connection_type", "usb")
     
     is_usb = serial_port is not None and serial_port.is_open
-    is_bt = getattr(app, 'bt_connected', False)
+    # bt_connected comes from a slow PowerShell poll of the OS pairing state;
+    # the BLE link's own state is fresher, so either one means "Bluetooth".
+    is_bt = getattr(app, 'bt_connected', False) or \
+            (ble_link_obj is not None and ble_link_obj.connected)
     is_wifi = device_ip is not None
     
     if is_usb:
