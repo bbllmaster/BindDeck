@@ -5,6 +5,7 @@ BleConfigService bleConfig;
 #if defined(TARGET_ESP32C3)
 
 #include <NimBLEDevice.h>
+#include <esp_log.h>
 
 // A single write can carry one or more lines; process by line so the PC app can
 // either write one command per write or batch several separated by '\n'.
@@ -43,6 +44,8 @@ bool BleConfigService::begin(NimBLEServer* server) {
   svc->start();
   _rx = rx;
   _tx = tx;
+  ESP_LOGE("BIND", "[cfg] service %s rx=%d tx=%d",
+           BLE_CFG_SVC_UUID, rx->getHandle(), tx->getHandle());
   return true;
 }
 

@@ -4,6 +4,7 @@
 
 #include <NimBLEDevice.h>
 #include <NimBLEHIDDevice.h>
+#include <esp_log.h>
 #include "ble_config.h"   // secondary GATT service for CFG/CMD over BLE
 
 // ---------------------------------------------------------------------------
@@ -52,10 +53,18 @@ static const uint8_t ASCII_MAP[128] = {
 static volatile bool s_connected = false;
 
 class HidServerCB : public NimBLEServerCallbacks {
-  void onConnect(NimBLEServer* /*s*/) override { s_connected = true; }
+  void onConnect(NimBLEServer* /*s*/) override {
+    s_connected = true;
+    // Keep advertising while connected: a bonded device that is already
+    // connected stops advertising, so a PC app could never *find* it to open
+    // the CFG channel. Staying discoverable fixes that.
+    NimBLEDevice::startAdvertising();
+    ESP_LOGE("BIND", "[ble] connected (advertising kept up)");
+  }
   void onDisconnect(NimBLEServer* /*s*/) override {
     s_connected = false;
     NimBLEDevice::startAdvertising();
+    ESP_LOGE("BIND", "[ble] disconnected -> re-advertising");
   }
 };
 
@@ -83,8 +92,10 @@ void BleKeyboard::begin() {
   _inputConsumer = _hid->inputReport(2);
   _hid->setBatteryLevel(_battery);
   // Create the CFG/CMD service on the same server BEFORE services are started.
-  bleConfig.begin(_server);
+  bool cfgOk = bleConfig.begin(_server);
+  ESP_LOGE("BIND", "[ble] cfg service: %s", cfgOk ? "created" : "FAILED");
   _hid->startServices();
+  ESP_LOGE("BIND", "[ble] services started, advertising");
 
   NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
   adv->setAppearance(HID_KEYBOARD);
