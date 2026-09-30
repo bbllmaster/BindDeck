@@ -14,6 +14,7 @@
 #include <esp_sleep.h>
 #include <esp_timer.h>
 #include <nvs_flash.h>     // robust NVS bring-up (see ensureNvs)
+#include <esp_partition.h>  // dump active partition table on NVS failure (ground truth)
 
 // === ESP32-C3: free the encoder pins from UART0 ===
 // On ESP32-C3 the default UART0 pins are GPIO20/21, which this firmware uses
@@ -1359,6 +1360,24 @@ void loopWiFi() {
 // g_nvsOk=false so setup() can skip BLE and degrade gracefully (OLED + WiFi
 // config-mode/OTA still work) rather than looping.
 static bool g_nvsOk = false;
+
+// Print the partition table the APP actually loaded (the one the bootloader
+// handed us), so a 261/NOT_FOUND in the field is self-explanatory: if "nvs"
+// isn't listed here, the chip is NOT running the merged firmware's table and
+// we can stop guessing and just read the real flash.
+static void dumpPartitions() {
+  log_e("[nvs] active partition table seen by app:");
+  esp_partition_iterator_t it = esp_partition_find(ESP_PARTITION_TYPE_ANY,
+                                                   ESP_PARTITION_SUBTYPE_ANY, NULL);
+  while (it != NULL) {
+    const esp_partition_t* p = esp_partition_get(it);
+    log_e("  %-12s type=%d sub=%d off=0x%06x size=0x%06x",
+          p->label, p->type, p->subtype, p->address, p->size);
+    it = esp_partition_next(it);
+  }
+  esp_partition_iterator_release(it);
+}
+
 static void ensureNvs() {
   esp_err_t err = nvs_flash_init();
   if (err == ESP_OK) { g_nvsOk = true; return; }
@@ -1372,6 +1391,7 @@ static void ensureNvs() {
           "MISSING from this chip's partition table. Flash the MERGED firmware "
           "(it includes the partition table), not the OTA/app-only image. "
           "BLE + config persist disabled this boot.", (int)err);
+    dumpPartitions();
     g_nvsOk = false;
     return;
   }

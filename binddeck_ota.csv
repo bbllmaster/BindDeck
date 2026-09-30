@@ -1,5 +1,9 @@
-﻿nvs,      data, nvs,     0x9000,  0x4000
-otadata,  data, ota,     0xd000,  0x2000
-phy_init, data, phy,     0xf000,  0x1000
-app0,     app,  ota_0,   0x10000, 0x1F0000
-app1,     app,  ota_1,   0x200000,0x1F0000
+# Name,     Type, SubType, Offset,   Size,    Flags
+# Classic ESP32 (esp32dev*): MUST keep a phy_init partition (data,phy @0xf000).
+# ESP32 stores RF/PHY calibration here; without it WiFi/BT misbehave.
+# Layout matches Espressif's official "Factory app, two OTA" example.
+nvs,      data, nvs,     0x9000,  0x4000,
+otadata,  data, ota,     0xd000,  0x2000,
+phy_init, data, phy,     0xf000,  0x1000,
+app0,     app,  ota_0,   0x10000, 0x1F0000,
+app1,     app,  ota_1,   0x200000,0x1F0000,
