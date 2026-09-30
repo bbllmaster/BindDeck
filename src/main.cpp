@@ -1420,21 +1420,33 @@ void setup() {
   loadConfig();  // populates switchPins[] from Preferences (or defaults)
   log_e("[DBG setup] loadConfig ok"); delay(30);
 
-  // Config mode: hold the encoder button CONTINUOUSLY for ~2s at boot to bring
-  // WiFi up for configuration. A transient/floating read can't trigger it.
-  // Otherwise WiFi stays OFF so the BLE HID link is stable.
+  // Config mode: hold the encoder push button (active-LOW, ENCODER_SW) while
+  // powering on. The old check required a *continuous* 2s LOW inside a rigid
+  // 2s window and reset on any single HIGH sample - mechanical encoder buttons
+  // bounce, so the hold almost never registered (device logged "normal mode"
+  // even while the button was held). New logic: sample up to ~5s, trigger once
+  // the button has been LOW for 100 consecutive 20ms samples (~2s), and ignore
+  // up to 3 consecutive bounce blips. Exit early once the button has clearly
+  // been released, so a normal boot isn't delayed much.
   pinMode(ENCODER_SW, INPUT_PULLUP);
   {
-    unsigned long holdStart = 0;
+    const int SAMPLE_MS  = 20;
+    const int HOLD_SAMPLES = 100;   // 100 * 20ms = 2s continuous hold
+    const int MAX_SAMPLES  = 250;   // ~5s total window to start pressing
+    const int GLITCH_TOL   = 3;     // ignore <=3 consecutive HIGH bounce blips
+    const int RELEASE_BREAK = 150;  // ~3s of continuous release -> normal boot
+    int lowCount = 0, highCount = 0;
     bool triggered = false;
-    for (int step = 0; step < 100 && !triggered; step++) {  // ~2s @ 20ms
+    for (int step = 0; step < MAX_SAMPLES && !triggered; step++) {
       if (digitalRead(ENCODER_SW) == LOW) {
-        if (holdStart == 0) holdStart = millis();
-        else if (millis() - holdStart >= 2000) triggered = true;
+        lowCount++; highCount = 0;
+        if (lowCount >= HOLD_SAMPLES) triggered = true;
       } else {
-        holdStart = 0;
+        highCount++;
+        if (highCount >= GLITCH_TOL) lowCount = 0;  // sustained release
+        if (highCount >= RELEASE_BREAK) break;       // clearly normal boot
       }
-      delay(20);
+      delay(SAMPLE_MS);
     }
     if (triggered) {
       g_configMode = true;
