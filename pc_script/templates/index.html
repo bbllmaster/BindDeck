@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <title>BindDeck</title>
-    <link rel="stylesheet" href="/static/style.css?v=4">
+    <link rel="stylesheet" href="/static/style.css?v=5">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
@@ -150,9 +150,9 @@
                 </div>
             </div>            
             <details class="form-group" style="margin-top: 15px; border-top: 1px solid var(--border); padding-top: 15px; cursor: pointer;">
-                <summary style="font-weight: bold; margin-bottom: 10px; color: var(--primary);">WIFI (TEMP WIRELESS)</summary>
+                <summary style="font-weight: bold; margin-bottom: 10px; color: var(--primary);" data-i18n="wifi_panel_title">WiFi (optional backup)</summary>
                 <div style="margin-bottom: 10px; font-size: 13px;">
-                    Status: <span id="wifiStatusText" style="color: var(--text-muted);">Checking...</span>
+                    <span data-i18n="wifi_status_label">Status</span>: <span id="wifiStatusText" style="color: var(--text-muted);">Checking...</span>
                 </div>
                 <div style="display: flex; gap: 5px; margin-bottom: 5px;">
                     <input type="text" id="wifiSSID" placeholder="Network Name (SSID)" style="flex: 1; padding: 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-body); color: var(--text-main);">
@@ -160,7 +160,7 @@
                 <div style="display: flex; gap: 5px; margin-bottom: 10px;">
                     <input type="password" id="wifiPass" placeholder="Password" style="flex: 1; padding: 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-body); color: var(--text-main);">
                 </div>
-                <button class="btn-primary" onclick="saveWifiConfig()" style="width: 100%;">Save and Send to Device</button>
+                <button class="btn-primary" onclick="saveWifiConfig()" style="width: 100%;" data-i18n="wifi_send_btn">Save and send to device</button>
             </details>
             
             <div class="form-group" style="margin-top: 15px; border-top: 1px solid var(--border); padding-top: 15px;">
@@ -453,7 +453,7 @@
         </div>
     </footer>
 
-    <script src="/static/app.js?v=4"></script>
+    <script src="/static/app.js?v=5"></script>
 
     <!-- Guided Tour Overlay -->
     <div id="tutorial-modal" class="tour-overlay" style="display: none;">
