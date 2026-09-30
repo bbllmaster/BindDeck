@@ -1409,25 +1409,15 @@ static void ensureNvs() {
 void setup() {
   Serial.begin(115200);
   Serial.setTimeout(10);
-  delay(1000);  // let the USB-CDC console enumerate before emitting diagnostics
-  log_e("[DBG setup] serial ok"); delay(30);
-
-  // Bring up NVS *before* anything that touches Preferences or NimBLE. A
-  // corrupt/incompatible NVS left by an older build must be healed here or the
-  // later NimBLE init aborts and the device reboots forever.
-  ensureNvs();
-
-  loadConfig();  // populates switchPins[] from Preferences (or defaults)
-  log_e("[DBG setup] loadConfig ok"); delay(30);
 
   // Config mode: hold the encoder push button (active-LOW, ENCODER_SW) while
-  // powering on. The old check required a *continuous* 2s LOW inside a rigid
-  // 2s window and reset on any single HIGH sample - mechanical encoder buttons
-  // bounce, so the hold almost never registered (device logged "normal mode"
-  // even while the button was held). New logic: sample up to ~5s, trigger once
-  // the button has been LOW for 100 consecutive 20ms samples (~2s), and ignore
-  // up to 3 consecutive bounce blips. Exit early once the button has clearly
-  // been released, so a normal boot isn't delayed much.
+  // powering on. Runs FIRST (before the 1s console delay and NVS) so the hold
+  // counter starts at boot - "hold from power-on for ~2s" works. The previous
+  // placement sat after a 1s delay + NVS + config load, so counting only began
+  // ~1.5s in and a 2s hold never accumulated (device logged "normal mode").
+  // Mechanical encoder buttons bounce, so we sample up to ~5s, trigger after
+  // 100 consecutive 20ms LOW samples (~2s), ignore up to 3 bounce blips, and
+  // break early on clear release so a normal boot isn't delayed much.
   pinMode(ENCODER_SW, INPUT_PULLUP);
   {
     const int SAMPLE_MS  = 20;
@@ -1457,6 +1447,17 @@ void setup() {
       log_e("[DBG setup] normal mode - WiFi OFF (BLE only)");
     }
   }
+
+  delay(1000);  // let the USB-CDC console enumerate before emitting diagnostics
+  log_e("[DBG setup] serial ok"); delay(30);
+
+  // Bring up NVS *before* anything that touches Preferences or NimBLE. A
+  // corrupt/incompatible NVS left by an older build must be healed here or the
+  // later NimBLE init aborts and the device reboots forever.
+  ensureNvs();
+
+  loadConfig();  // populates switchPins[] from Preferences (or defaults)
+  log_e("[DBG setup] loadConfig ok"); delay(30);
 
   // CRITICAL for ESP32-C3: the devkit's default I2C pins are GPIO8/9, but this
   // board wires the OLED to OLED_SDA/OLED_SCL (4/5 on C3). Passing them
