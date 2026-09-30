@@ -18,13 +18,15 @@ error; we pair on demand and retry once.
 import asyncio
 import threading
 
+BLEAK_IMPORT_ERROR = None
 try:
     from bleak import BleakClient, BleakScanner
     from bleak.exc import BleakGATTProtocolError
 
     BLEAK_AVAILABLE = True
-except Exception:  # bleak not installed - the app still runs on WiFi/serial
+except Exception as _e:  # bleak not installed - app still runs on WiFi/serial
     BLEAK_AVAILABLE = False
+    BLEAK_IMPORT_ERROR = f"{type(_e).__name__}: {_e}"
 
 SVC = "b1d3c0de-0001-4a5b-9c6d-1a2b3c4d5e6f"
 RX = "b1d3c0de-0002-4a5b-9c6d-1a2b3c4d5e6f"

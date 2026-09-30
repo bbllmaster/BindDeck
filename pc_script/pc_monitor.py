@@ -28,10 +28,12 @@ import random
 from flask import Flask, render_template, request, jsonify
 
 # BLE config channel (optional: without bleak the app still works over WiFi/USB)
+_ble_import_error = None
 try:
     import ble_link
-except Exception:
+except Exception as _e:
     ble_link = None
+    _ble_import_error = f"{type(_e).__name__}: {_e}"
 ble_link_obj = None  # assigned once handle_device_line() exists
 
 # keyboard and pywebview are in requirements.txt but are platform-specific
@@ -1301,11 +1303,14 @@ def main():
     threading.Thread(target=udp_listen_loop, daemon=True).start()
 
     # BLE config channel: works with no WiFi and no USB cable.
-    if ble_link_obj is not None and ble_link_obj.available:
-        if ble_link_obj.start():
-            print("[ble] config link started")
-    else:
-        print("[ble] bleak not installed - BLE config channel disabled")
+    if ble_link is None:
+        print(f"[ble] ble_link.py not importable ({_ble_import_error}) - "
+              "is it next to pc_monitor.py? BLE config disabled.")
+    elif not ble_link_obj.available:
+        print(f"[ble] bleak unavailable ({ble_link.BLEAK_IMPORT_ERROR}) - "
+              "'pip install bleak'. BLE config disabled.")
+    elif ble_link_obj.start():
+        print("[ble] config link started")
     
     # Enganchar teclas F13-F20
     if keyboard is None:
