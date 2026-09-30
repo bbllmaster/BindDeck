@@ -64,7 +64,7 @@ On the **classic ESP32**, settings and telemetry travel over the serial port.
 ### Wi-Fi (optional backup)
 There are two ways to get the device onto your network:
 
-* **From the device itself (provisioning):** hold the **encoder button for ~2 seconds while powering on**. The device creates an access point named **`BindDeck-XXXX`**. Connect your phone to it, open **`http://192.168.4.1`**, pick your network from the list and enter the password. The credentials are stored in the device and reused on every boot.
+* **From the device itself (provisioning):** press the **encoder button once while powering on** (a short press is enough, no need to hold). The device creates an access point named **`BindDeck-XXXX`**. Connect your phone to it, open **`http://192.168.4.1`**, pick your network from the list and enter the password. The credentials are stored in the device and reused on every boot. To leave the AP mode, hold the encoder button ~1 second, or it auto-exits after 5 minutes.
 * **From the application:** open the **WiFi** panel and enter the SSID and password, then press *Save and send to device*.
 
 You can send configuration over any of the three channels; whichever is available will be used.

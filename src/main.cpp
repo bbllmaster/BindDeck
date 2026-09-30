@@ -1410,31 +1410,27 @@ void setup() {
   Serial.begin(115200);
   Serial.setTimeout(10);
 
-  // Config mode: hold the encoder push button (active-LOW, ENCODER_SW) while
-  // powering on. Runs FIRST (before the 1s console delay and NVS) so the hold
-  // counter starts at boot - "hold from power-on for ~2s" works. The previous
-  // placement sat after a 1s delay + NVS + config load, so counting only began
-  // ~1.5s in and a 2s hold never accumulated (device logged "normal mode").
-  // Mechanical encoder buttons bounce, so we sample up to ~5s, trigger after
-  // 100 consecutive 20ms LOW samples (~2s), ignore up to 3 bounce blips, and
-  // break early on clear release so a normal boot isn't delayed much.
+  // Config mode: press the encoder push button (active-LOW, ENCODER_SW) while
+  // powering on. Runs FIRST (before the 1s console delay and NVS) so the check
+  // starts at boot. A 2s hold was overkill: at boot there is no "normal use" to
+  // protect against, and config mode auto-exits after 5 min (or a ~1s hold to
+  // leave), so a stray tap is cheap. We trigger on a *debounced* press - the
+  // pin must be stably LOW for PRESS_SAMPLES (200ms) - which is fast and immune
+  // to contact bounce. If nothing is pressed within RELEASE_BREAK, it's a
+  // normal boot and we move on quickly.
   pinMode(ENCODER_SW, INPUT_PULLUP);
   {
     const int SAMPLE_MS  = 20;
-    const int HOLD_SAMPLES = 100;   // 100 * 20ms = 2s continuous hold
-    const int MAX_SAMPLES  = 250;   // ~5s total window to start pressing
+    const int PRESS_SAMPLES = 10;   // 10 * 20ms = 200ms stable LOW = pressed
+    const int MAX_SAMPLES  = 60;    // ~1.2s total window to detect a press
     const int GLITCH_TOL   = 3;     // ignore <=3 consecutive HIGH bounce blips
-    // Release threshold: break as soon as the button has been clearly released
-    // for this long WITHOUT ever being held - a normal boot. Kept small (0.8s)
-    // so boot-to-display stays fast; the user holds from power-on, so the hold
-    // itself is detected long before this (lowCount hits 100 at 2s).
-    const int RELEASE_BREAK = 40;   // 40 * 20ms = 0.8s of continuous release
+    const int RELEASE_BREAK = 30;   // 30 * 20ms = 0.6s of release -> normal boot
     int lowCount = 0, highCount = 0;
     bool triggered = false;
     for (int step = 0; step < MAX_SAMPLES && !triggered; step++) {
       if (digitalRead(ENCODER_SW) == LOW) {
         lowCount++; highCount = 0;
-        if (lowCount >= HOLD_SAMPLES) triggered = true;
+        if (lowCount >= PRESS_SAMPLES) triggered = true;
       } else {
         highCount++;
         if (highCount >= GLITCH_TOL) lowCount = 0;  // sustained release
