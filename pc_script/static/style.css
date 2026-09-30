@@ -627,6 +627,11 @@ body.light-theme .device-mockup {
 }
 .modal-content {
     width: 400px;
+    /* Settings now holds the GPIO grid, so the modal can get taller than the
+       window: cap it and let it scroll, otherwise the Save/Close buttons end
+       up off-screen. */
+    max-height: 90vh;
+    overflow-y: auto;
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-lg);
     animation: modal-sheet-in 0.25s var(--ease-out);
