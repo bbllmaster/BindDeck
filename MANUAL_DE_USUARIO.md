@@ -56,6 +56,8 @@ The desktop application can read the same information (`GET /api/fw_version`), a
 ### Bluetooth (recommended)
 Pairing gives you **two things over one connection**: the wireless keyboard, and the configuration channel used to send settings. Nothing else is needed — no cable, no Wi-Fi.
 
+> **ESP32-C3 only.** The configuration-over-Bluetooth channel is currently implemented on the ESP32-C3. On the **classic ESP32** Bluetooth is the keyboard only and settings go over the USB serial connection.
+
 ### USB
 On the **classic ESP32**, settings and telemetry travel over the serial port.
 
@@ -215,6 +217,8 @@ La aplicación de escritorio puede leer la misma información (`GET /api/fw_vers
 ### Bluetooth (recomendado)
 El emparejamiento te da **dos cosas en una sola conexión**: el teclado inalámbrico y el canal de configuración por el que se envían los ajustes. No hace falta nada más — ni cable ni Wi-Fi.
 
+> **Solo ESP32-C3.** El canal de configuración por Bluetooth está implementado actualmente en el ESP32-C3. En el **ESP32 clásico** el Bluetooth es solo el teclado y los ajustes van por la conexión serie USB.
+
 ### USB
 En el **ESP32 clásico**, los ajustes y la telemetría viajan por el puerto serie.
 
@@ -310,3 +314,166 @@ Las claves de emparejamiento Bluetooth se guardan en la partición `nvs` del dis
 ---
 
 ¡Disfruta de tu BindDeck! Si el proyecto te resulta útil, puedes apoyar al creador [invitándole a un café a través de GitHub Sponsors](https://github.com/sponsors/SanX18).
+
+---
+---
+
+## 🇨🇳 中文版 / Chinese Version
+
+# BindDeck 用户手册（ESP32 / ESP32-C3）
+
+欢迎使用 **BindDeck** —— 一台基于 ESP32 的自定义宏键盘。本手册介绍设备的全部功能，以及如何配合桌面端程序把它用得更好。
+
+---
+
+## 1. 设备主要特性
+
+BindDeck 不只是宏键盘，它更像一个桌面小助手。
+
+* **8 个机械按键（SW1–SW8）**：可自定义为打开程序、发送快捷键、输入文本或控制多媒体。
+* **智能旋钮**：多功能滚轮，带动态自动校准，可控制系统音量、缩放、切换标签页、撤销/重做，或调节**某一个指定程序的音量**。
+* **OLED 显示屏**：按键时播放自定义动画，显示电脑的 CPU/GPU 状态、时钟，以及设备信息。**菜单键可在 4 个界面之间循环**。
+* **三种与电脑通信的方式**：
+  * **蓝牙（BLE）** —— 作为无线键盘使用。（**ESP32-C3 上，同一条蓝牙连接还承载配置通道**，不插线、不连 WiFi 也能下发设置；经典 ESP32 的配置走 USB 串口，见下文。）
+  * **USB** —— 经典 ESP32 通过串口传输配置和系统状态。
+  * **WiFi** —— 可选的备用通道，用于配置和状态回传。
+
+---
+
+## 2. 选对固件（重要！）
+
+有两件独立的事要选对：**芯片**和**屏幕驱动**。烧错屏幕驱动是最常见的错误 —— 屏幕会黑屏或显示错乱。
+
+| 你的板子 | PlatformIO 环境名 |
+|---|---|
+| ESP32 + SSD1306（0.96" 128x64） | `esp32dev` |
+| ESP32 + SH1106（1.3" 128x64） | `esp32dev_sh1106` |
+| ESP32 + SH1107（1.5" 128x128） | `esp32dev_sh1107` |
+| ESP32-C3 + SSD1306（0.96" 128x64） | `esp32c3_ssd1306` |
+| ESP32-C3 + SH1106（1.3" 128x64） | `esp32c3` |
+
+**不确定板子上是哪块屏？** 按**菜单键**切到**设备信息屏** —— 固件知道自己是什么：
+
+```
+BindDeck
+Chip: C3
+Disp: SSD1306
+FW  : v1.0.0
+Sep 30 2026 03:23:00
+```
+
+桌面端程序也能读到同样的信息（`GET /api/fw_version`），并且会响应 `CMD:VERSION` 命令，返回 `VERSION:<版本>,<屏幕>,<芯片>,<编译时间>`。
+
+---
+
+## 3. 初次设置
+
+1. **烧固件**：按第 2 节选对应你板子的固件 —— 用 PlatformIO 编译，或直接烧 `firmware.bin`。
+2. **连接 USB**：把 BindDeck 插到电脑 USB 口。既供电，也在经典 ESP32 上建立串口连接（用于状态回传）。
+3. **蓝牙配对**：在电脑的蓝牙设置里配对，设备会以键盘形式出现，名字是 **BindDeck**。（在 ESP32-C3 上，这次配对同时打开配置通道。）
+4. **打开上位机程序**：如果右上角连接指示灯是绿色，就可以开始用了。
+
+---
+
+## 4. 设备怎么和电脑通信
+
+### 蓝牙（推荐）
+配对一次同时给你**两样东西**：无线键盘，以及下发设置用的配置通道。
+**注意：配置通道（配置走蓝牙）目前只有 ESP32-C3 支持。经典 ESP32 上蓝牙只做键盘，配置走 USB 串口。**
+
+### USB
+**经典 ESP32** 上，配置和状态都走串口。
+
+### WiFi（可选备份）
+有两种方式把设备接入你的网络：
+
+* **在设备上配网**：**开机时按住旋钮约 2 秒**，设备会开一个叫 **`BindDeck-XXXX`** 的热点。用手机连上，打开 **`http://192.168.4.1`**，从列表里选你家网络并输入密码。凭据会保存在设备里，之后每次开机自动使用。
+* **在上位机里配置**：展开 **WiFi** 面板，填 SSID 和密码，点 *保存并发送到设备*。
+
+三条通道任一条可用即可，程序会自动用它。
+
+---
+
+## 5. 使用桌面端程序
+
+程序里有一个模拟你硬件的虚拟界面。**任何改动都要下发给设备**：点标题栏右上角的 **同步到设备** 按钮（圆形箭头图标）。它会**把整套配置全量下发**，所以某次没送达的设置随时可以再同步一次。
+
+### 自定义按键（宏）
+在虚拟界面上点击任意按键（SW1–SW8）编辑它的行为，可以配置：
+* **动作类型**：
+  * `程序`：选一个 `.exe` 路径，按下即刻打开。
+  * `多媒体`：播放/暂停、下一首、上一首、静音。
+  * `键盘快捷键`：如 `Ctrl + C`、`Alt + Tab`。
+  * `文本`：按一个键输入一整段文字。
+* **显示文字**：按下时出现在 OLED 上的短名字。
+* **OLED 动画**：选择按下时在屏幕（和虚拟界面）上播放的动画（对勾、闪电、静音、爱心等）。
+
+### 配置旋钮
+在右侧面板可以选择它的工作模式（`encMode`）：
+* `系统音量`：调节主音量。
+* `缩放`：在浏览器/编辑器里 Ctrl +/- 缩放。
+* `浏览器标签页`：在打开的标签页之间切换。
+* `撤销 / 重做`：适合设计和编辑。
+* `指定程序音量`：只调节某一个程序 —— 在出现的输入框里填它的进程名（例如 `Spotify.exe`）。
+
+*技术说明*：旋钮带连续动态跟踪逻辑。每次开机都会按你硬件的实际行程重新贴合，避免死区。如果感觉行程不够，开机后把它拧到两端极限一次即可。
+
+### 亮度、屏幕与休眠
+* 拖动 **OLED 亮度** 滑块调节屏幕强度（夜里用很合适）。
+* **休眠模式**和**休眠时间**在 **设置**（右上角齿轮图标）里配置。设备闲置超过该时间后，会关闭 OLED 并进入深度睡眠以保护面板 —— **按任意键唤醒**。
+
+### 按键 GPIO（高级 —— 在设置里）
+给每个物理按键分配不同的 GPIO 属于高级设置，所以它放在 **设置 → 按键 GPIO**。在那里可以逐个改引脚、**恢复默认**、或**保存**。保留引脚（旋钮、菜单键、OLED 占用的）不能分配。
+
+---
+
+## 6. OLED 都有哪些界面
+
+按**菜单键**循环 4 个界面：
+
+1. **电脑状态** —— CPU / GPU 温度与占用。
+2. **时钟** —— 通过 WiFi 走 NTP 自动同步（注意：时区目前固定为中欧时间，其他地区显示会不准）。
+3. **眼睛** —— 交互式待机动画。
+4. **设备信息** —— 芯片、屏幕驱动、固件版本、编译时间。
+
+---
+
+## 7. 状态回传与资源监视
+
+只要上位机程序处于打开或最小化到托盘的状态，它就会在后台用 *LibreHardwareMonitor* 读取你电脑的状态。
+在 BindDeck 的状态界面上可以实时看到：
+* **CPU / GPU 温度**（℃）
+* **CPU / GPU 占用率**（%）
+
+任一温度超过 85℃ 时，设备屏幕会给出警告，保护你的硬件。
+
+---
+
+## 8. 更新固件
+
+有两种烧写方式，选错了就是"为什么每次都要重新配对"的原因：
+
+| 场景 | 烧什么 | 蓝牙配对 |
+|---|---|---|
+| **首次，或想彻底重置** | 起始地址 `0x0` 的**整片**镜像 | **需要重新配对** |
+| **日常升级** | 只烧**应用部分**到 `0x10000` | **保留** |
+
+蓝牙配对密钥存在设备的 `nvs` 分区（`0x9000`）。从 `0x0` 整片烧会**覆盖该分区**，设备忘记密钥、而电脑还留着自己那一半 —— 于是链路看着是"已连接"但用不了，必须先在系统里删除设备再重新配对。只烧应用部分不动 `nvs`，所以**日常升级永远不需要重新配对**。
+
+> 日常升级**不要**格式化/擦除整片 flash。
+
+---
+
+## 9. 常见问题与排障
+
+* **指示灯红色、显示"未连接"**：确认 USB 线支持数据传输（不只是充电线）。关掉可能占用串口的程序（Arduino 串口监视器、VSCode 等）。
+* **按了键 Windows 没反应**：确认设备已正确蓝牙配对。经典 ESP32 上 USB 只负责传配置，**按键永远走蓝牙**（它是无线键盘）。
+* **改了设置、点了同步，设备没反应**：用**标题栏的同步按钮**（全量下发）。还是没反应就看上位机控制台 —— 每条配置命令都会打印 `[cfg] CFG:... -> ble`（或 `udp` / `serial`）。如果没有这行、或显示 `NOTHING`，说明三条通道都没连上。
+* **蓝牙显示已连接但没反应**：配置走蓝牙需要**含配置通道的固件（v15 及以上）**，去设备信息屏看版本。如果第一次写入报 `Insufficient Authentication`，说明设备还没绑定 —— 配对一次即可。
+* **屏幕黑屏或显示错乱**：烧了**别的屏幕驱动**的固件。去设备信息屏确认这版固件期望什么，再按第 2 节烧对应的。
+* **开机时旋钮行为异常**：把旋钮从一端拧到另一端一次，芯片会立刻学会物理极限，之后就 100% 准确。
+* **程序读不到温度**：以**管理员身份**运行 BindDeck，Windows 需要提权才允许 *LibreHardwareMonitor* 读取主板和显卡传感器。
+
+---
+
+祝你玩得开心！如果这个项目对你有用，可以通过 [GitHub Sponsors 请作者喝杯咖啡](https://github.com/sponsors/SanX18) 支持他。
