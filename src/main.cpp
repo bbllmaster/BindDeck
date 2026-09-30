@@ -526,6 +526,12 @@ void processCommand(String data) {
     } else if (data.indexOf("C:") != -1 && data.indexOf("G:") != -1) {
       sscanf(data.c_str(), "C:%d,U:%d,G:%d,V:%d", &cpu_temp, &cpu_usage, &gpu_temp, &gpu_usage);
     }
+
+    // Acknowledge CFG: commands. Without this a CFG: write is completely silent,
+    // so neither the PC app nor a channel test can tell whether it was applied.
+    if (data.startsWith("CFG:")) {
+      sendDataToPC("ACK:" + data.substring(0, 96));
+    }
 }
 
 unsigned long lastSerialTime = 0;
