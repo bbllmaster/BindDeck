@@ -2,8 +2,6 @@
 
 BleConfigService bleConfig;
 
-#if defined(TARGET_ESP32C3)
-
 #include <NimBLEDevice.h>
 #include <esp_log.h>
 
@@ -64,11 +62,3 @@ bool BleConfigService::subscribed() {
   NimBLECharacteristic* tx = (NimBLECharacteristic*)_tx;
   return tx && tx->getSubscribedCount() > 0;
 }
-
-#else   // non-C3 targets keep using the t-vk library + USB/WiFi config
-
-bool BleConfigService::begin(NimBLEServer*) { return false; }
-void BleConfigService::notify(const String&) {}
-bool BleConfigService::subscribed() { return false; }
-
-#endif

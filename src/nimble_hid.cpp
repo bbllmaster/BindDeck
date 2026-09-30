@@ -1,7 +1,5 @@
 #include "nimble_hid.h"
 
-#if defined(TARGET_ESP32C3)
-
 #include <NimBLEDevice.h>
 #include <NimBLEHIDDevice.h>
 #include <esp_log.h>
@@ -199,5 +197,3 @@ size_t BleKeyboard::write(const MediaKeyReport& k) {
   _inputConsumer->notify();
   return 1;
 }
-
-#endif  // TARGET_ESP32C3

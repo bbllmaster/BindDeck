@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#include "nimble_hid.h"   // C3: from-scratch NimBLE HID; other targets: t-vk
+#include "nimble_hid.h"   // NimBLE HID + CFG/CMD for ALL targets (classic ESP32 + C3)
 #include "ble_config.h"   // C3: CFG/CMD over the BLE link (secondary GATT service)
 #include <Wire.h>
 #include <esp_log.h>

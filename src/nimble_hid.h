@@ -1,16 +1,13 @@
 #pragma once
 #include <Arduino.h>
 
-#if defined(TARGET_ESP32C3)
 // ---------------------------------------------------------------------------
-// Drop-in replacement for the t-vk BleKeyboard, implemented directly on NimBLE.
-//
-// Same class name, same KEY_* constants and same call semantics as the t-vk
-// library, so the rest of the firmware is untouched. It exists because the
-// t-vk library cannot bring up a stable (bonded + encrypted) HID link on the
-// ESP32-C3: the host keeps dropping the link during pairing. This version owns
-// the pairing security (bonding, legacy pairing, NO MITM) and is verified
-// working on a C3.
+// NimBLE-based HID keyboard + CFG/CMD service, used for ALL targets (classic
+// ESP32 + C3). Drop-in replacement for the t-vk BleKeyboard: same class name,
+// same KEY_* constants and same call semantics, so the rest of the firmware is
+// untouched. The t-vk/Bluedroid stack was ~570KB heavier and, on the C3, could
+// not hold a stable bonded+encrypted HID link. This version owns the pairing
+// security (bonding, legacy pairing, NO MITM) and is verified on both chips.
 // ---------------------------------------------------------------------------
 
 #include <NimBLEDevice.h>
@@ -70,7 +67,3 @@ private:
   uint8_t _modifiers = 0;
   uint8_t _keys[6]   = { 0, 0, 0, 0, 0, 0 };
 };
-
-#else
-#include <BleKeyboard.h>
-#endif
