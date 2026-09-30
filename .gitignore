@@ -1,8 +1,45 @@
-.pio
+# ---- PlatformIO / editor -------------------------------------------------
+.pio/
 .vscode/
+
+# ---- Python --------------------------------------------------------------
 __pycache__/
 *.pyc
-*.log
-macro_config.json
+
+# ---- Build outputs (never commit these) ----------------------------------
+# PyInstaller output, produced by build_final.bat / release.py
+pc_script/dist/
+pc_script/build/
+
 # 合并固件（bootloader+分区表+app，构建产物，勿提交）
 merged_firmware*.bin
+# 只含 app 的升级包（烧 0x10000），同样是构建产物
+update_apponly*.bin
+
+# ---- Stray build copies at the repo root ---------------------------------
+# 仓库根目录曾经放着一份完整的 Windows 应用构建产物（BindDeck.exe + 依赖 DLL
+# + LibreHardwareMonitor 的语言目录）。真正的构建输出在 pc_script/dist（上面已
+# 忽略），由 release.py 发布，所以根目录不该有这些东西。
+/BindDeck.exe
+/*.dll
+/*.pdb
+/LibreHardwareMonitor.exe
+/LibreHardwareMonitor*.config
+/LibreHardwareMonitor*.xml
+/de/
+/es/
+/fr/
+/it/
+/ja/
+/pl/
+/ru/
+/sv/
+/tr/
+/zh-CN/
+/zh-Hant/
+
+# ---- Runtime state -------------------------------------------------------
+*.log
+app_log.txt
+log.txt
+macro_config.json
