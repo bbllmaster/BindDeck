@@ -616,6 +616,31 @@ const int BATTERY_PIN = -1; // ESP32-C3 has no GPIO35; battery sense not wired
 
 bool isBatteryCharging = false;
 
+// Is a pack actually connected?
+//
+// With no pack attached the sense input floats, and a floating ESP32 ADC pin
+// reads noise anywhere across the range - the old "raw < 1000" test let those
+// readings through, and the UI happily showed "0%". A real pack - even a flat
+// 3.0 V one - reads a *stable* ~1850 or more through the 1:2 divider, so
+// require both a sensible level and a small spread over several samples.
+bool batteryPresent(int* outAvg) {
+  const int SAMPLES = 8;
+  const int FLOOR = 1800;      // 3.0 V pack through the divider
+  const int MAX_SPREAD = 150;  // a floating pin wanders much more than this
+  int lo = 4096, hi = 0;
+  long sum = 0;
+  for (int i = 0; i < SAMPLES; i++) {
+    int v = analogRead(BATTERY_PIN);
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+    sum += v;
+    delayMicroseconds(150);
+  }
+  int avg = (int)(sum / SAMPLES);
+  if (outAvg) *outAvg = avg;
+  return (avg >= FLOOR) && ((hi - lo) <= MAX_SPREAD);
+}
+
 int getBatteryPercentage() {
   if (BATTERY_PIN < 0) { isBatteryCharging = false; return -1; }
   static float filteredRaw = -1;
@@ -631,10 +656,21 @@ int getBatteryPercentage() {
   // These values must be adjusted based on the real divider you use.
   int raw = analogRead(BATTERY_PIN);
   
-  // If the pin is not connected to the divider, it will read a very low value (noise or 0)
-  // A depleted battery (3.0V) would still give > 1800. So if it is less than 1000, 
-  // we know for sure that there is no measurement hardware connected.
-  if (raw < 1000) {
+  // Presence is re-evaluated once a second; averaging 8 ADC samples is too
+  // expensive to do on every frame, and the answer cannot change that fast.
+  static bool present = false;
+  static bool loggedPresent = false;
+  static unsigned long lastPresenceCheck = 0;
+  static int lastRaw = 0;
+  if (millis() - lastPresenceCheck > 1000) {
+    lastPresenceCheck = millis();
+    present = batteryPresent(&lastRaw);
+    if (present != loggedPresent) {
+      log_e("[bat] raw=%d present=%d", lastRaw, (int)present);
+      loggedPresent = present;
+    }
+  }
+  if (!present) {
     filteredRaw = -1;
     isBatteryCharging = false;
     return -1; // -1 means "Battery not detected"
