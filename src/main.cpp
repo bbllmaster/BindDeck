@@ -10,6 +10,7 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <WebServer.h>
+#include <Update.h>        // OTA: write the inactive app slot over WiFi
 #include <esp_sleep.h>
 #include <esp_timer.h>
 
@@ -1199,6 +1200,7 @@ static String cfgPage() {
     }
     h += F("</ul>");
   }
+  h += F("<p><a href='/update'>→ 固件 OTA 升级（无线刷机）</a></p>");
   h += F("<p style='color:#888'>设备只在配网模式开热点；配好后回到蓝牙模式，WiFi 会关闭。</p>"
          "</body></html>");
   return h;
@@ -1254,6 +1256,56 @@ void setupProvisioning() {
 
   cfgServer.on("/", HTTP_GET, handleCfgRoot);
   cfgServer.on("/save", HTTP_POST, handleCfgSave);
+
+  // --- Firmware OTA (config-mode / AP only) ---------------------------------
+  // Only reachable while the device is in config mode (the portal/AP is only
+  // up then), so OTA can't be triggered over the normal BLE-only link.
+  cfgServer.on("/update", HTTP_GET, []() {
+    cfgServer.send(200, "text/html; charset=utf-8",
+      F("<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>BindDeck 固件升级</title></head>"
+        "<body style='font-family:sans-serif;max-width:440px;margin:24px auto;padding:0 16px'>"
+        "<h2>固件 OTA 升级</h2>"
+        "<p>选择 .bin 固件（合并整片 或 单 app 均可），会自动写入另一个分区并重启。</p>"
+        "<form method='POST' action='/update' enctype='multipart/form-data'>"
+        "<input type='file' name='firmware' accept='.bin' required><br><br>"
+        "<button style='padding:10px 20px'>开始升级</button></form>"
+        "<p style='color:#888'>升级中请勿断电；完成后设备自动重启并回到蓝牙模式。</p>"
+        "<p><a href='/'>返回配网页</a></p></body></html>"));
+  });
+  cfgServer.on("/update", HTTP_POST,
+    []() {  // runs after the upload finishes
+      String msg = F("<meta charset='utf-8'><p>升级");
+      msg += Update.hasError() ? F("失败") : F("完成");
+      msg += F("，设备重启中…</p><p><a href='/'>返回</a></p>");
+      cfgServer.send(200, "text/html; charset=utf-8", msg);
+      delay(500);
+      ESP.restart();
+    },
+    []() {  // upload callback, called repeatedly with chunks
+      HTTPUpload& upload = cfgServer.upload();
+      if (upload.status == UPLOAD_FILE_START) {
+        log_e("[ota] start: %s", upload.filename.c_str());
+        if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+          Update.printError(Serial);
+          log_e("[ota] Update.begin failed (partition full?)");
+        }
+      } else if (upload.status == UPLOAD_FILE_WRITE) {
+        if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+          Update.printError(Serial);
+          log_e("[ota] Update.write failed");
+        }
+      } else if (upload.status == UPLOAD_FILE_END) {
+        if (Update.end(true)) {
+          log_e("[ota] done, %u bytes, will reboot", upload.totalSize);
+        } else {
+          Update.printError(Serial);
+          log_e("[ota] Update.end failed");
+        }
+      }
+    });
+
   cfgServer.onNotFound([]() {
     cfgServer.sendHeader("Location", "/", true);
     cfgServer.send(302, "text/plain", "");
