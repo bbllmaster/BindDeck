@@ -2,12 +2,25 @@ import esptool
 
 import subprocess
 import sys
+# Hide the console window for every subprocess the app spawns on Windows.
+# This MUST remain a CLASS: on Windows, asyncio does `class Popen(subprocess.Popen)`
+# while importing asyncio.windows_utils, and replacing the class with a plain
+# function makes that blow up with
+#   TypeError: function() argument 'code' must be code, not str
+# which in turn breaks every module that imports asyncio (bleak, i.e. the BLE
+# config channel). Subclassing keeps the type intact.
 _old_popen = subprocess.Popen
-def _new_popen(*args, **kwargs):
-    if sys.platform == 'win32':
-        kwargs['creationflags'] = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
-    return _old_popen(*args, **kwargs)
-subprocess.Popen = _new_popen
+
+
+class _NoWindowPopen(_old_popen):
+    def __init__(self, *args, **kwargs):
+        if sys.platform == 'win32':
+            kwargs.setdefault('creationflags',
+                              getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000))
+        super().__init__(*args, **kwargs)
+
+
+subprocess.Popen = _NoWindowPopen
 
 import time
 import tempfile
