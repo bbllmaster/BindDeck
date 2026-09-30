@@ -32,13 +32,15 @@ bool BleConfigService::begin(NimBLEServer* server) {
   NimBLEService* svc = server->createService(BLE_CFG_SVC_UUID);
   if (!svc) return false;
 
-  // Encrypted-only: the link is already bonded/encrypted for HID, so this
-  // keeps the config channel from being writable by an unbonded peer.
+  // Deliberately NOT encrypted/authenticated. Requiring security here made the
+  // channel unusable from any client that had not already bonded (the OS
+  // reports "Insufficient Authentication" on write), which is exactly what we
+  // hit from both the PC and a phone. The config channel is short-range and
+  // only writes preferences, so it stays open; tighten later if needed.
   NimBLECharacteristic* rx = svc->createCharacteristic(
-      BLE_CFG_RX_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_ENC, 512);
+      BLE_CFG_RX_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR, 512);
   NimBLECharacteristic* tx = svc->createCharacteristic(
-      BLE_CFG_TX_UUID,
-      NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::READ_ENC, 512);
+      BLE_CFG_TX_UUID, NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::READ, 512);
   rx->setCallbacks(new CfgRxCallbacks());
 
   svc->start();

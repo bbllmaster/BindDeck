@@ -25,6 +25,7 @@ import argparse
 import asyncio
 
 from bleak import BleakClient, BleakScanner
+from bleak.exc import BleakGATTProtocolError
 
 SVC = "b1d3c0de-0001-4a5b-9c6d-1a2b3c4d5e6f"
 RX = "b1d3c0de-0002-4a5b-9c6d-1a2b3c4d5e6f"
@@ -78,7 +79,16 @@ async def run(address: str, cmds: list) -> None:
         await client.start_notify(TX, on_tx)
         for cmd in cmds:
             print(f"      -> {cmd}", flush=True)
-            await client.write_gatt_char(RX, cmd.encode(), response=True)
+            try:
+                await client.write_gatt_char(RX, cmd.encode(), response=True)
+            except BleakGATTProtocolError as e:
+                print(f"      write FAILED: {e}", flush=True)
+                print("      (the characteristic's security requirement is not met -", flush=True)
+                print("       flash newer firmware, or pair the device first)", flush=True)
+                break
+            except Exception as e:  # noqa: BLE001 - surface anything else clearly
+                print(f"      write error: {type(e).__name__}: {e}", flush=True)
+                break
             await asyncio.sleep(0.6)
         print("      waiting 3s for notifications ...", flush=True)
         await asyncio.sleep(3.0)

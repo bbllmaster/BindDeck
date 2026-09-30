@@ -57,9 +57,12 @@ class HidServerCB : public NimBLEServerCallbacks {
     s_connected = true;
     // Keep advertising while connected: a bonded device that is already
     // connected stops advertising, so a PC app could never *find* it to open
-    // the CFG channel. Staying discoverable fixes that.
-    NimBLEDevice::startAdvertising();
-    ESP_LOGE("BIND", "[ble] connected (advertising kept up)");
+    // the CFG channel. Without this you have to un-pair the keyboard in the OS
+    // before a scanner can see the device at all.
+    NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
+    if (adv) adv->stop();
+    bool ok = NimBLEDevice::startAdvertising();
+    ESP_LOGE("BIND", "[ble] connected; re-advertising=%d", (int)ok);
   }
   void onDisconnect(NimBLEServer* /*s*/) override {
     s_connected = false;
