@@ -55,14 +55,15 @@ static volatile bool s_connected = false;
 class HidServerCB : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* /*s*/) override {
     s_connected = true;
-    // Keep advertising while connected: a bonded device that is already
-    // connected stops advertising, so a PC app could never *find* it to open
-    // the CFG channel. Without this you have to un-pair the keyboard in the OS
-    // before a scanner can see the device at all.
+    // The stack stops advertising when the link comes up. Clear the library's
+    // advertising state here, but do NOT restart it from this callback - doing
+    // stop+start inside the connection callback races and silently fails.
+    // keepAdvertising() (main loop) brings it back a moment later.
     NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
-    if (adv) adv->stop();
-    bool ok = NimBLEDevice::startAdvertising();
-    ESP_LOGE("BIND", "[ble] connected; re-advertising=%d", (int)ok);
+    if (adv) {
+      ESP_LOGE("BIND", "[ble] connected (wasAdvertising=%d)", (int)adv->isAdvertising());
+      adv->stop();
+    }
   }
   void onDisconnect(NimBLEServer* /*s*/) override {
     s_connected = false;
@@ -107,6 +108,15 @@ void BleKeyboard::begin() {
 }
 
 bool BleKeyboard::isConnected() { return s_connected; }
+
+void BleKeyboard::keepAdvertising() {
+  if (!s_connected) return;
+  NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
+  if (adv && !adv->isAdvertising()) {
+    bool ok = NimBLEDevice::startAdvertising();
+    ESP_LOGE("BIND", "[ble] re-advertise while connected -> %d", (int)ok);
+  }
+}
 
 void BleKeyboard::setBatteryLevel(uint8_t level) {
   _battery = level;

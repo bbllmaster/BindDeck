@@ -1308,6 +1308,16 @@ void loop() {
     // --- BLE connection diagnostic (C3 especially: "paired" in OS != HID
     // channel open). Logs the firmware's view of the BLE HID connection so we
     // can tell a missing key-send apart from a key-send the OS ignores. ---
+    // Keep the device discoverable while connected, otherwise a config app can
+    // never find it (the stack stops advertising once the link is up).
+#ifdef TARGET_ESP32C3
+    static unsigned long _lastAdvKick = 0;
+    if (millis() - _lastAdvKick > 1500) {
+      _lastAdvKick = millis();
+      bleKeyboard.keepAdvertising();
+    }
+#endif
+
     static unsigned long _lastBleLog = 0;
     if (millis() - _lastBleLog > 3000) {
       _lastBleLog = millis();

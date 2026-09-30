@@ -43,6 +43,9 @@ public:
 
   void   begin();
   bool   isConnected();
+  // Called from the main loop: if we are connected but no longer advertising,
+  // restart advertising so the device stays discoverable for the config app.
+  void   keepAdvertising();
   void   setBatteryLevel(uint8_t level);
   void   setDelay(uint32_t /*ms*/) {}
 
