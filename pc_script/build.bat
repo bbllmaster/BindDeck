@@ -1,5 +1,5 @@
 @echo off
 echo Construyendo BindDeck.exe...
-python -m PyInstaller --noconfirm --onefile --windowed --icon="static/logo.ico" --add-data "templates;templates/" --add-data "static;static/" --add-data "LibreHardwareMonitor;LibreHardwareMonitor/" "pc_monitor.py" --name "BindDeck"
+python -m PyInstaller --noconfirm --onefile --windowed --icon="static/logo.ico" --add-data "templates;templates/" --add-data "static;static/" --add-data "LibreHardwareMonitor;LibreHardwareMonitor/" --hidden-import ble_link --collect-all bleak "pc_monitor.py" --name "BindDeck"
 echo Terminado. El ejecutable esta en la carpeta 'dist'
 pause

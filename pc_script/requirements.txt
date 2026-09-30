@@ -6,3 +6,6 @@ flask
 keyboard
 pywebview
 pyinstaller
+bleak
+pystray
+Pillow

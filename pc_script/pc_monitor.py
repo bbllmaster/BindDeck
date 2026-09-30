@@ -27,6 +27,13 @@ import GPUtil
 import random
 from flask import Flask, render_template, request, jsonify
 
+# BLE config channel (optional: without bleak the app still works over WiFi/USB)
+try:
+    import ble_link
+except Exception:
+    ble_link = None
+ble_link_obj = None  # assigned once handle_device_line() exists
+
 # keyboard and pywebview are in requirements.txt but are platform-specific
 # (pywebview needs a GUI backend; keyboard needs OS-level hooks). Wrap them
 # so a missing install degrades instead of crashing startup.
@@ -322,7 +329,57 @@ def send_to_device(cmd):
             sent = True
         except Exception as e:
             print("Serial send error:", e)
+    # BLE config channel: the same CFG:/CMD: lines over the existing BLE link,
+    # so the device can be configured with no WiFi at all.
+    if ble_link_obj is not None and ble_link_obj.send(cmd):
+        sent = True
     return sent
+
+
+def _kbd_send(seq):
+    if keyboard is not None:
+        keyboard.send(seq)
+
+
+def handle_device_line(line):
+    """Handle one line coming back from the device.
+
+    USB serial, WiFi UDP and BLE notifications all funnel through here, so the
+    behaviour is identical whichever transport the line arrived on.
+    """
+    if line.startswith("BTN:"):
+        try:
+            idx = int(line.split(":")[1])
+            threading.Thread(target=execute_macro, args=(idx + 13,), daemon=True).start()
+        except Exception:
+            pass
+    elif line.startswith("ENC:"):
+        cmd = line.split(":")[1] if ":" in line else ""
+        if cmd in ("APPVUP", "APPVDN"):
+            app_name = config.get("esp32", {}).get("encApp", "")
+            if app_name:
+                threading.Thread(target=change_app_volume,
+                                 args=(app_name, cmd == "APPVUP"), daemon=True).start()
+        elif cmd == "VUP": _kbd_send("volume up")
+        elif cmd == "VDN": _kbd_send("volume down")
+        elif cmd == "ZIN": _kbd_send("ctrl++")
+        elif cmd == "ZOUT": _kbd_send("ctrl+-")
+        elif cmd == "TFWD": _kbd_send("ctrl+tab")
+        elif cmd == "TBCK": _kbd_send("ctrl+shift+tab")
+        elif cmd == "REDO": _kbd_send("ctrl+y")
+        elif cmd == "UNDO": _kbd_send("ctrl+z")
+    elif line.startswith("WIFI_INFO:"):
+        try:
+            parts = line[len("WIFI_INFO:"):].split(",")
+            wifi_status_data["connected"] = True
+            if len(parts) > 0: wifi_status_data["ssid"] = parts[0]
+            if len(parts) > 1: wifi_status_data["ip"] = parts[1]
+        except Exception:
+            pass
+    # ACK:<cmd> lines just confirm a CFG: command was applied; nothing to do.
+
+
+ble_link_obj = ble_link.BleLink(on_line=handle_device_line) if ble_link else None
 
 # --- KEYBOARD HOOKS ---
 last_macro_times = {}
@@ -644,6 +701,7 @@ wifi_status_data = {"connected": False, "ssid": "", "ip": ""}
 def api_get_wifi_status():
     global wifi_status_data
     if serial_port and serial_port.is_open or device_ip or \
+       (ble_link_obj is not None and ble_link_obj.connected) or \
        config.get("app", {}).get("connection_type") == "wifi":
         try:
             send_to_device("CMD:GET_WIFI")
@@ -652,6 +710,18 @@ def api_get_wifi_status():
         except:
             pass
     return jsonify({"connected": False, "ssid": "", "ip": ""})
+
+
+@app.route("/api/ble_status", methods=["GET"])
+def api_ble_status():
+    """State of the BLE config channel (used by the connection panel)."""
+    if ble_link_obj is None or not ble_link_obj.available:
+        return jsonify({"available": False, "connected": False, "address": None})
+    return jsonify({
+        "available": True,
+        "connected": ble_link_obj.connected,
+        "address": ble_link_obj.address,
+    })
 
 @app.route("/api/send_config", methods=["POST"])
 def api_send_config():
@@ -1036,35 +1106,8 @@ def serial_read_loop():
             sp = serial_port
             if sp and sp.is_open and sp.in_waiting > 0:
                 line = sp.readline().decode('utf-8', errors='ignore').strip()
-                if line.startswith("BTN:"):
-                    try:
-                        idx = int(line.split(":")[1])
-                        key_num = idx + 13
-                        threading.Thread(target=execute_macro, args=(key_num,), daemon=True).start()
-                    except:
-                        pass
-                elif line.startswith("ENC:"):
-                    cmd = line.split(":")[1]
-                    # Solo nos interesa APPVUP y APPVDN para controlar el app volume por USB
-                    if cmd == "APPVUP" or cmd == "APPVDN":
-                        app_name = config.get("esp32", {}).get("encApp", "")
-                        if app_name:
-                            threading.Thread(target=change_app_volume, args=(app_name, cmd == "APPVUP"), daemon=True).start()
-                    # Otras acciones de encMode 0..3 se pueden simular si queremos que funcionen 100% por USB sin Bluetooth
-                    elif cmd == "VUP": keyboard.send("volume up")
-                    elif cmd == "VDN": keyboard.send("volume down")
-                    elif cmd == "ZIN": keyboard.send("ctrl++")
-                    elif cmd == "ZOUT": keyboard.send("ctrl+-")
-                    elif cmd == "TFWD": keyboard.send("ctrl+tab")
-                    elif cmd == "TBCK": keyboard.send("ctrl+shift+tab")
-                    elif cmd == "REDO": keyboard.send("ctrl+y")
-                    elif cmd == "UNDO": keyboard.send("ctrl+z")
-                elif line.startswith("WIFI_INFO:"):
-                    global wifi_status_data
-                    parts = line.split(":")[1].split(",")
-                    ssid = parts[0] if len(parts) > 0 else ""
-                    ip = parts[1] if len(parts) > 1 else ""
-                    wifi_status_data = {"connected": ssid != "DISCONNECTED", "ssid": ssid, "ip": ip}
+                if line:
+                    handle_device_line(line)
         except:
             pass
         time.sleep(0.02)
@@ -1082,37 +1125,8 @@ def udp_listen_loop():
             # reliable on networks that filter directed/broadcast traffic).
             if addr:
                 device_ip = addr[0]
-            if line.startswith("BTN:"):
-                try:
-                    idx = int(line.split(":")[1])
-                    key_num = idx + 13
-                    threading.Thread(target=execute_macro, args=(key_num,), daemon=True).start()
-                except:
-                    pass
-            elif line.startswith("ENC:"):
-                cmd = line.split(":")[1]
-                if cmd == "APPVUP" or cmd == "APPVDN":
-                    app_name = config.get("esp32", {}).get("encApp", "")
-                    if app_name:
-                        threading.Thread(target=change_app_volume, args=(app_name, cmd == "APPVUP"), daemon=True).start()
-                elif cmd == "VUP": keyboard.send("volume up")
-                elif cmd == "VDN": keyboard.send("volume down")
-                elif cmd == "ZIN": keyboard.send("ctrl++")
-                elif cmd == "ZOUT": keyboard.send("ctrl+-")
-                elif cmd == "TFWD": keyboard.send("ctrl+tab")
-                elif cmd == "TBCK": keyboard.send("ctrl+shift+tab")
-                elif cmd == "REDO": keyboard.send("ctrl+y")
-                elif cmd == "UNDO": keyboard.send("ctrl+z")
-            elif line.startswith("WIFI_INFO:"):
-                # Device reported its Wi-Fi state (populates the TEMP WIRELESS panel)
-                try:
-                    payload = line[len("WIFI_INFO:"):]
-                    parts = payload.split(",")
-                    wifi_status_data["connected"] = True
-                    if len(parts) > 0: wifi_status_data["ssid"] = parts[0]
-                    if len(parts) > 1: wifi_status_data["ip"] = parts[1]
-                except Exception:
-                    pass
+            if line:
+                handle_device_line(line)
     except Exception as e:
         print("UDP Listen Error:", e)
 
@@ -1258,6 +1272,13 @@ def main():
     threading.Thread(target=gpu_poll_loop, daemon=True).start()
     threading.Thread(target=serial_read_loop, daemon=True).start()
     threading.Thread(target=udp_listen_loop, daemon=True).start()
+
+    # BLE config channel: works with no WiFi and no USB cable.
+    if ble_link_obj is not None and ble_link_obj.available:
+        if ble_link_obj.start():
+            print("[ble] config link started")
+    else:
+        print("[ble] bleak not installed - BLE config channel disabled")
     
     # Enganchar teclas F13-F20
     if keyboard is None:

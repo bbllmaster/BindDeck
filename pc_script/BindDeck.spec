@@ -4,13 +4,17 @@ from PyInstaller.utils.hooks import collect_data_files
 datas = [('templates', 'templates'), ('static', 'static'), ('LibreHardwareMonitor', 'LibreHardwareMonitor'), ('firmware.bin', '.'), ('SoundVolumeView.exe', '.')]
 datas += collect_data_files('esptool')
 
+# ble_link is a local module; bleak pulls in its platform backend dynamically.
+# If BLE fails in the packaged exe, add --collect-all bleak.
+hiddenimports = ['ble_link', 'bleak']
+
 
 a = Analysis(
     ['pc_monitor.py'],
     pathex=[],
     binaries=[],
     datas=datas,
-    hiddenimports=[],
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
