@@ -53,6 +53,7 @@ static NoopStream g_nullPrintC3;
   // drawing current. DISPLAYOFF really turns it off, which is what matters
   // before deep sleep.
   #define DISPLAY_OFF()     display.oled_command(SH110X_DISPLAYOFF)
+  #define DISPLAY_ON()      display.oled_command(SH110X_DISPLAYON)
   #define DISPLAY_BEGIN()   display.begin(SCREEN_ADDRESS)
   #define DISPLAY_ROTATION  1
   #define ALLOC_FAILED_MSG  "OLED allocation failed"
@@ -66,6 +67,7 @@ static NoopStream g_nullPrintC3;
   // drawing current. DISPLAYOFF really turns it off, which is what matters
   // before deep sleep.
   #define DISPLAY_OFF()     display.oled_command(SH110X_DISPLAYOFF)
+  #define DISPLAY_ON()      display.oled_command(SH110X_DISPLAYON)
   #define DISPLAY_BEGIN()   display.begin(SCREEN_ADDRESS)
   #define DISPLAY_ROTATION  0
   #define ALLOC_FAILED_MSG  "OLED allocation failed"
@@ -80,6 +82,7 @@ static NoopStream g_nullPrintC3;
   // drawing current. DISPLAYOFF really turns it off, which is what matters
   // before deep sleep.
   #define DISPLAY_OFF()     display.ssd1306_command(SSD1306_DISPLAYOFF)
+  #define DISPLAY_ON()      display.ssd1306_command(SSD1306_DISPLAYON)
   #define DISPLAY_BEGIN()   display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)
   #define DISPLAY_ROTATION  0
   #define ALLOC_FAILED_MSG  "SSD1306 allocation failed"
@@ -1326,13 +1329,29 @@ void setup() {
   // missing display can never hang the firmware.
   Wire.begin(OLED_SDA, OLED_SCL);
   Wire.setTimeout(50);
-  if(!DISPLAY_BEGIN()) {
+  // After deep sleep (or a power cycle that follows it) the OLED controller
+  // may still be in its DISPLAYOFF state and not yet ready on the bus, so the
+  // very first begin() can return false and the panel stays dark even though
+  // the chip is awake (the ~100 mA draw). Give the panel a moment to settle,
+  // then retry the init a few times so a transiently-busy I2C device recovers.
+  delay(50);
+  bool dispOk = false;
+  for (int i = 0; i < 5 && !dispOk; i++) {
+    dispOk = DISPLAY_BEGIN();
+    if (!dispOk) { log_e("[DBG setup] display begin failed, retry %d", i); delay(50); }
+  }
+  if (!dispOk) {
     Serial.println(F(ALLOC_FAILED_MSG));
   }
-  log_e("[DBG setup] display ok"); delay(30);
+  // Explicitly turn the panel ON. The driver's begin() should do this, but if
+  // the OLED was left in DISPLAYOFF across a deep-sleep reset, forcing it here
+  // guarantees the screen is never left dark after a wake.
+  DISPLAY_ON();
+  log_e("[DBG setup] display ok (begin=%d)", (int)dispOk); delay(30);
   display.setRotation(DISPLAY_ROTATION);
 
   SET_BRIGHTNESS(brightness);
+  DISPLAY_ON();
   display.clearDisplay();
   display.display();
   
