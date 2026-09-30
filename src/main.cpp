@@ -73,6 +73,29 @@ static NoopStream g_nullPrintC3;
   #define ALLOC_FAILED_MSG  "SSD1306 allocation failed"
 #endif
 
+// === Firmware identity =====================================================
+// There are several board/display variants and it is easy to flash the wrong
+// image. The firmware therefore knows exactly what it is: version, display
+// driver and chip. It is reported to the PC app (CMD:VERSION) and shown on the
+// OLED settings screen, so a board can always be identified.
+#define FW_VERSION "1.0.0"
+
+#ifdef USE_SH1107
+  #define FW_DISPLAY "SH1107"
+#elif defined(USE_SH1106)
+  #define FW_DISPLAY "SH1106"
+#else
+  #define FW_DISPLAY "SSD1306"
+#endif
+
+#ifdef TARGET_ESP32C3
+  #define FW_CHIP "C3"
+#else
+  #define FW_CHIP "ESP32"
+#endif
+
+#define FW_BUILD __DATE__ " " __TIME__
+
 // WiFi credentials are NOT hardcoded. They are provisioned on the device: in
 // config mode it raises its own access point and serves a small web page where
 // you pick a network and type the password. The credentials are then stored in
@@ -221,7 +244,7 @@ void applyButtonPins() {
   log_e("[DBG apply] done");
 }
 Bounce2::Button menuBtn;
-int currentIdleScreen = 0; // 0=Stats, 1=Time, 2=Eyes
+int currentIdleScreen = 0; // 0=Stats, 1=Time, 2=Eyes, 3=Firmware info
 
 
 enum State {
@@ -315,6 +338,7 @@ void drawTimeScreen() {
 void drawIdle();
 void drawAction();
 void drawMenu();
+void drawInfoScreen();
 void drawUpdateScreen();
 void drawMicIcon(int x, int y, uint16_t color, uint16_t bg);
 void handleEncoderAction(bool forward);
@@ -495,6 +519,11 @@ void processCommand(String data) {
         WiFi.begin(ssid.c_str(), pwd.c_str());
   configTzTime("CET-1CEST,M3.5.0,M10.5.0/3", "pool.ntp.org");
       }
+    } else if (data.startsWith("CMD:VERSION")) {
+      // VERSION:<fw>,<display>,<chip>,<build>  - lets the app (and us) tell
+      // which variant a board is running.
+      sendDataToPC(String("VERSION:") + FW_VERSION + "," + FW_DISPLAY + "," +
+                   FW_CHIP + "," + FW_BUILD);
     } else if (data.startsWith("CMD:GET_WIFI")) {
       if (WiFi.status() == WL_CONNECTED) {
         preferences.begin("binddeck", true);
@@ -928,6 +957,34 @@ void drawAction() {
   }
 }
 
+// Firmware identity screen: which build / chip / display this board is running,
+// so a board can always be matched to the right image without guessing.
+void drawInfoScreen() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(DISPLAY_WHITE);
+
+  display.setCursor(0, 0);
+  display.println("BindDeck");
+
+  display.setCursor(0, 16);
+  display.print("Chip: ");
+  display.println(FW_CHIP);
+
+  display.setCursor(0, 26);
+  display.print("Disp: ");
+  display.println(FW_DISPLAY);
+
+  display.setCursor(0, 36);
+  display.print("FW  : v");
+  display.println(FW_VERSION);
+
+  display.setCursor(0, 48);
+  display.println(FW_BUILD);
+
+  display.display();
+}
+
 void drawMenu() {
   display.clearDisplay();
   display.setTextSize(1);
@@ -1289,7 +1346,7 @@ void loop() {
   menuBtn.update();
   
   if (menuBtn.pressed()) {
-    currentIdleScreen = (currentIdleScreen + 1) % 3;
+    currentIdleScreen = (currentIdleScreen + 1) % 4;
     if (currentIdleScreen == 2) {
        currentState = STATE_EYES;
        eyes.setMood(random(0, 4));
@@ -1408,6 +1465,8 @@ void loop() {
         drawIdle(); // PC Stats
       } else if (currentIdleScreen == 1) {
         drawTimeScreen();
+      } else if (currentIdleScreen == 3) {
+        drawInfoScreen(); // Firmware identity (chip / display / version)
       }
     } else if (currentState == STATE_ACTION) {
       drawAction();

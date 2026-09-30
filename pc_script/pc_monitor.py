@@ -341,6 +341,10 @@ def _kbd_send(seq):
         keyboard.send(seq)
 
 
+# Last firmware identity reported by the device (CMD:VERSION).
+fw_info = {"version": "", "display": "", "chip": "", "build": ""}
+
+
 def handle_device_line(line):
     """Handle one line coming back from the device.
 
@@ -374,6 +378,17 @@ def handle_device_line(line):
             wifi_status_data["connected"] = True
             if len(parts) > 0: wifi_status_data["ssid"] = parts[0]
             if len(parts) > 1: wifi_status_data["ip"] = parts[1]
+        except Exception:
+            pass
+    elif line.startswith("VERSION:"):
+        # VERSION:<fw>,<display>,<chip>,<build> - identifies which variant the
+        # board is running, so the UI can warn about a wrong image.
+        try:
+            parts = line[len("VERSION:"):].split(",")
+            fw_info["version"] = parts[0].strip() if len(parts) > 0 else ""
+            fw_info["display"] = parts[1].strip() if len(parts) > 1 else ""
+            fw_info["chip"]    = parts[2].strip() if len(parts) > 2 else ""
+            fw_info["build"]   = parts[3].strip() if len(parts) > 3 else ""
         except Exception:
             pass
     # ACK:<cmd> lines just confirm a CFG: command was applied; nothing to do.
@@ -722,6 +737,18 @@ def api_ble_status():
         "connected": ble_link_obj.connected,
         "address": ble_link_obj.address,
     })
+
+
+@app.route("/api/fw_version", methods=["GET"])
+def api_fw_version():
+    """Ask the device which firmware it is running.
+
+    Returns version/display/chip/build so the UI can show it and warn when the
+    flashed image does not match the selected board variant.
+    """
+    send_to_device("CMD:VERSION")
+    time.sleep(0.5)
+    return jsonify(fw_info)
 
 @app.route("/api/send_config", methods=["POST"])
 def api_send_config():
