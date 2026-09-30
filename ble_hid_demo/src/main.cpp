@@ -29,6 +29,31 @@ void setup() {
   Serial.println();
   Serial.println("[TEST] ==== C3 BLE HID minimal test ====");
   bleKeyboard.begin();
+
+#if defined(SEC_SC_BOND) && !defined(USE_NIMBLE)
+  // The t-vk library asks for ESP_LE_AUTH_REQ_SC_MITM_BOND, but this board has
+  // no display/keypad so the default IO capability is NoInputNoOutput - MITM
+  // can then never be satisfied and some hosts abort/lose the link mid-pairing.
+  // Override to Secure Connections + bonding, WITHOUT the MITM requirement.
+  {
+    uint8_t auth  = ESP_LE_AUTH_REQ_SC_BOND;
+    uint8_t iocap = ESP_IO_CAP_NONE;
+    esp_ble_gap_set_security_param(ESP_BLE_SM_AUTHEN_REQ_MODE, &auth, sizeof(auth));
+    esp_ble_gap_set_security_param(ESP_BLE_SM_IOCAP_MODE, &iocap, sizeof(iocap));
+    Serial.println("[TEST] security override: SC_BOND + IO_CAP_NONE (no MITM)");
+  }
+#elif defined(SEC_SC_OUT) && !defined(USE_NIMBLE)
+  // Alternative: keep MITM but advertise Keyboard+Display so a passkey flow is
+  // possible (some hosts want authenticated pairing for keyboards).
+  {
+    uint8_t auth  = ESP_LE_AUTH_REQ_SC_MITM_BOND;
+    uint8_t iocap = ESP_IO_CAP_KBDISP;
+    esp_ble_gap_set_security_param(ESP_BLE_SM_AUTHEN_REQ_MODE, &auth, sizeof(auth));
+    esp_ble_gap_set_security_param(ESP_BLE_SM_IOCAP_MODE, &iocap, sizeof(iocap));
+    Serial.println("[TEST] security override: SC_MITM_BOND + IO_CAP_KBDISP");
+  }
+#endif
+
   Serial.println("[TEST] advertising started, waiting for host to connect...");
 }
 
