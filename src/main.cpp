@@ -189,16 +189,18 @@ void readEncoder() {
   encoderSteps += enc_states[(old_AB & 0x0f)];
 }
 
-#ifdef TARGET_ESP32C3
 // High-rate sampler: runs in the esp_timer task (NOT an IRAM ISR), so there is
 // no flash/IRAM hazard and no interrupt storm. 1 kHz is far above any human
 // EC11 rotation speed, guaranteeing every detent transition is captured.
+// Used on BOTH chips - the main loop does OLED redraws + BLE and runs every
+// ~tens of ms, which misses quadrature edges on fast rotation and makes the
+// volume bar appear while the value never actually changes. The classic ESP32
+// used to poll in loop() and had exactly that bug.
 static esp_timer_handle_t s_encoderTimer = NULL;
 static void encoderTimerCb(void* arg) {
   (void)arg;
   readEncoder();
 }
-#endif
 
 // Pins
 // Default button GPIOs; overridable at runtime via CFG:PINS: from the PC app.
@@ -767,10 +769,12 @@ void drawBTIcon(int x, int y) {
   display.drawLine(x+5, y+6, x+1, y+2, DISPLAY_WHITE);
 }
 
-// Neither Wi-Fi nor Bluetooth is up.
+// No wireless link at all. Drawn as the Bluetooth glyph with a diagonal slash
+// - the conventional "Bluetooth off" mark - which reads far more clearly than
+// a bare cross did.
 void drawNoLinkIcon(int x, int y) {
-  display.drawLine(x+1, y+1, x+7, y+7, DISPLAY_WHITE);
-  display.drawLine(x+7, y+1, x+1, y+7, DISPLAY_WHITE);
+  drawBTIcon(x, y);
+  display.drawLine(x - 2, y + 9, x + 7, y - 1, DISPLAY_WHITE);
 }
 
 void drawIdle() {
@@ -1355,12 +1359,11 @@ void setup() {
   pinMode(ENCODER_DT, INPUT_PULLUP);
   pinMode(ENCODER_SW, INPUT_PULLUP);
   log_e("[DBG setup] enc pins ok"); delay(30);
-#ifdef TARGET_ESP32C3
   // Encoder is sampled by a 1 kHz esp_timer (encoderTimerCb) instead of once
   // per loop(). The main loop does OLED redraws + BLE and runs every ~tens of
-  // ms, which previously missed quadrature transitions on fast rotation and
-  // made the volume bar appear but never change. Sampling at 1 kHz captures
-  // every edge. The timer runs in a task context, so digitalRead() is safe.
+  // ms, which misses quadrature transitions on fast rotation and makes the
+  // volume bar appear but never change. Sampling at 1 kHz captures every edge.
+  // The timer runs in a task context, so digitalRead() is safe.
   if (s_encoderTimer == NULL) {
     esp_timer_create_args_t encTimerCfg = {
       .callback = &encoderTimerCb,
@@ -1372,9 +1375,6 @@ void setup() {
     esp_timer_start_periodic(s_encoderTimer, 1000); // 1000 us = 1 ms
   }
   log_e("[DBG setup] enc timer 1kHz started"); delay(30);
-#else
-  log_e("[DBG setup] enc poll (loop)"); delay(30);
-#endif
 
   log_e("[DBG setup] applyPins..."); delay(30);
 applyButtonPins();
@@ -1507,12 +1507,8 @@ void loop() {
     }
 
     // --- Rotary Encoder ---
-    // On ESP32-C3, encoderSteps is updated by the 1 kHz esp_timer
-    // (encoderTimerCb). On classic ESP32 there is no timer; keep polling here
-    // so its behavior is unchanged from before the C3 timer rework.
-#ifndef TARGET_ESP32C3
-    readEncoder();
-#endif
+    // encoderSteps is maintained by the 1 kHz esp_timer (encoderTimerCb) on
+    // both chips; this block just consumes it.
     static int lastEncoderSteps = 0;
     if (encoderSteps / 4 != lastEncoderSteps / 4) {
       noInterrupts();
