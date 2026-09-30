@@ -1362,13 +1362,26 @@ static bool g_nvsOk = false;
 static void ensureNvs() {
   esp_err_t err = nvs_flash_init();
   if (err == ESP_OK) { g_nvsOk = true; return; }
+  if (err == ESP_ERR_NOT_FOUND) {
+    // The "nvs" partition is absent from the partition table on this chip.
+    // This happens when only the APP was flashed (web OTA / app-only image)
+    // over a partition table that has no nvs entry - the firmware cannot
+    // create a partition, so the only fix is to flash the MERGED firmware,
+    // which carries the partition table. BLE + config persist are disabled.
+    log_e("[nvs] init failed: %d (ESP_ERR_NOT_FOUND) - the 'nvs' partition is "
+          "MISSING from this chip's partition table. Flash the MERGED firmware "
+          "(it includes the partition table), not the OTA/app-only image. "
+          "BLE + config persist disabled this boot.", (int)err);
+    g_nvsOk = false;
+    return;
+  }
   log_e("[nvs] init failed (%d), erasing partition and retrying", (int)err);
   if (nvs_flash_erase() == ESP_OK) {
     err = nvs_flash_init();
     log_e("[nvs] re-init after erase: %d", (int)err);
     g_nvsOk = (err == ESP_OK);
   } else {
-    log_e("[nvs] erase failed - NVS unavailable this boot (BLE disabled)");
+    log_e("[nvs] erase failed (%d) - NVS unavailable this boot (BLE disabled)", (int)err);
     g_nvsOk = false;
   }
 }
