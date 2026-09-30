@@ -1424,7 +1424,11 @@ void setup() {
     const int HOLD_SAMPLES = 100;   // 100 * 20ms = 2s continuous hold
     const int MAX_SAMPLES  = 250;   // ~5s total window to start pressing
     const int GLITCH_TOL   = 3;     // ignore <=3 consecutive HIGH bounce blips
-    const int RELEASE_BREAK = 150;  // ~3s of continuous release -> normal boot
+    // Release threshold: break as soon as the button has been clearly released
+    // for this long WITHOUT ever being held - a normal boot. Kept small (0.8s)
+    // so boot-to-display stays fast; the user holds from power-on, so the hold
+    // itself is detected long before this (lowCount hits 100 at 2s).
+    const int RELEASE_BREAK = 40;   // 40 * 20ms = 0.8s of continuous release
     int lowCount = 0, highCount = 0;
     bool triggered = false;
     for (int step = 0; step < MAX_SAMPLES && !triggered; step++) {
