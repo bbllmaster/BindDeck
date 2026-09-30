@@ -114,6 +114,8 @@ Press the **menu button** to cycle through the four screens:
 3. **Eyes** — the interactive idle animation.
 4. **Device info** — chip, display driver, firmware version and build date.
 
+On the **PC statistics** screen, the small icon in the bottom-right corner shows the link that is actually up: Wi-Fi, Bluetooth, or a cross when neither is connected. The title reads **NO SIGNAL** instead of *PC STATS* whenever the application has not sent anything for 3 seconds — that means it is not running, or no channel is connected.
+
 ---
 
 ## 7. Telemetry and Resource Monitor (PC Monitor)
@@ -275,6 +277,8 @@ Pulsa el **botón de menú** para recorrer las cuatro pantallas:
 2. **Reloj** — se sincroniza automáticamente por Wi-Fi (NTP). Elige tu zona horaria en **Ajustes → Zona horaria**; se envía al dispositivo en la siguiente sincronización (la de fábrica es Europa Central).
 3. **Ojos** — la animación interactiva de reposo.
 4. **Información del dispositivo** — chip, controlador de pantalla, versión de firmware y fecha de compilación.
+
+En la pantalla de **estadísticas del PC**, el icono de la esquina inferior derecha muestra el enlace que está realmente activo: Wi-Fi, Bluetooth, o una cruz cuando no hay ninguno conectado. El título pone **NO SIGNAL** en lugar de *PC STATS* cuando la aplicación lleva 3 segundos sin enviar nada — es decir, no está en marcha o no hay ningún canal conectado.
 
 ---
 
@@ -438,6 +442,8 @@ Sep 30 2026 03:23:00
 2. **时钟** —— 通过 WiFi 走 NTP 自动同步。时区在 **设置 → 时区** 里选，下次「同步到设备」时下发（出厂默认为中欧时间）。
 3. **眼睛** —— 交互式待机动画。
 4. **设备信息** —— 芯片、屏幕驱动、固件版本、编译时间。
+
+**电脑状态**屏右下角那个小图标表示**当前真正在用的链路**：WiFi / 蓝牙 / 都没连时显示一个叉。标题栏在**上位机 3 秒内没发任何数据**时会从 `PC STATS` 变成 **`NO SIGNAL`** —— 也就是上位机没在运行，或者三条通道都不通。
 
 ---
 

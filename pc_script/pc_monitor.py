@@ -1312,7 +1312,14 @@ def hardware_loop():
                     except:
                         pass
                     serial_port = None
-        
+
+        # BLE: on a wireless C3 this is the only link, so the telemetry has to
+        # travel over it too - otherwise the device shows NO SIGNAL with 0/0
+        # stats even though the keyboard and the config channel both work.
+        # send() is a no-op when the link is down.
+        if ble_link_obj is not None:
+            ble_link_obj.send(data_str.strip())
+
         time.sleep(1)
 
 

@@ -767,6 +767,12 @@ void drawBTIcon(int x, int y) {
   display.drawLine(x+5, y+6, x+1, y+2, DISPLAY_WHITE);
 }
 
+// Neither Wi-Fi nor Bluetooth is up.
+void drawNoLinkIcon(int x, int y) {
+  display.drawLine(x+1, y+1, x+7, y+7, DISPLAY_WHITE);
+  display.drawLine(x+7, y+1, x+1, y+7, DISPLAY_WHITE);
+}
+
 void drawIdle() {
   display.clearDisplay();
 
@@ -802,11 +808,15 @@ void drawIdle() {
       display.print("PC STATS");
   }
   
-  // Connection Icons (Bottom Right)
+  // Connection icon (bottom right): show the transport that is actually up.
+  // This used to draw the Bluetooth icon whenever Wi-Fi was down, connected or
+  // not, which told you nothing about the Bluetooth link.
   if (WiFi.status() == WL_CONNECTED) {
     drawWiFiIcon(116, 54);
-  } else {
+  } else if (bleKeyboard.isConnected()) {
     drawBTIcon(120, 54);
+  } else {
+    drawNoLinkIcon(120, 54);
   }
   
   int batPct = getBatteryPercentage();
