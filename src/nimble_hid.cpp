@@ -4,6 +4,7 @@
 
 #include <NimBLEDevice.h>
 #include <NimBLEHIDDevice.h>
+#include "ble_config.h"   // secondary GATT service for CFG/CMD over BLE
 
 // ---------------------------------------------------------------------------
 // HID report map: keyboard (report ID 1) + consumer control (report ID 2).
@@ -63,6 +64,7 @@ BleKeyboard::BleKeyboard(const char* deviceName, const char* deviceManufacturer,
 
 void BleKeyboard::begin() {
   NimBLEDevice::init(_name);
+  NimBLEDevice::setMTU(517);                                      // room for long CFG lines
   NimBLEDevice::setPower(ESP_PWR_LVL_P9);                         // max TX power
   // Bonding + LEGACY pairing, no MITM: the C3 has no display/keypad, and
   // requiring MITM is exactly what made the t-vk build unusable.
@@ -80,6 +82,8 @@ void BleKeyboard::begin() {
   _inputKbd      = _hid->inputReport(1);
   _inputConsumer = _hid->inputReport(2);
   _hid->setBatteryLevel(_battery);
+  // Create the CFG/CMD service on the same server BEFORE services are started.
+  bleConfig.begin(_server);
   _hid->startServices();
 
   NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();

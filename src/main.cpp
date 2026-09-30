@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include "nimble_hid.h"   // C3: from-scratch NimBLE HID; other targets: t-vk
+#include "ble_config.h"   // C3: CFG/CMD over the BLE link (secondary GATT service)
 #include <Wire.h>
 #include <esp_log.h>
 #include <Adafruit_GFX.h>
@@ -383,6 +384,9 @@ bool pcIpSet = false;
 
 void sendDataToPC(String data) {
   Serial.println(data);
+  // Same line goes out over the BLE CFG service when the PC is subscribed, so
+  // the PC app works without WiFi; the WiFi UDP path below stays as a fallback.
+  bleConfig.notify(data);
   if (WiFi.status() == WL_CONNECTED) {
      if (pcIpSet) {
        udp.beginPacket(pcIP, 4211);
@@ -1183,6 +1187,12 @@ void setup() {
   
   // BLE is always initialized: the keyboard must keep working even during the
   // brief config window, and the OLED must keep drawing (never blank).
+  // Route CFG:/CMD: lines written to the BLE config characteristic into the
+  // same command parser the WiFi UDP channel uses. Must be set before begin().
+  bleConfig.onCommand = [](const String& cmd) {
+    log_e("[cfg ble] rx: %s", cmd.c_str());
+    processCommand(cmd);
+  };
   log_e("[DBG setup] ble begin..."); delay(30);
   bleKeyboard.begin();
   log_e("[DBG setup] ble ok"); delay(30);
