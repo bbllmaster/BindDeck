@@ -49,6 +49,10 @@ static NoopStream g_nullPrintC3;
   #define DISPLAY_BLACK     SH110X_BLACK
   #define DISPLAY_INVERSE   SH110X_INVERSE
   #define SET_BRIGHTNESS(v) display.setContrast(v)
+  // Contrast 0 only blanks the content - the panel stays powered and keeps
+  // drawing current. DISPLAYOFF really turns it off, which is what matters
+  // before deep sleep.
+  #define DISPLAY_OFF()     display.oled_command(SH110X_DISPLAYOFF)
   #define DISPLAY_BEGIN()   display.begin(SCREEN_ADDRESS)
   #define DISPLAY_ROTATION  1
   #define ALLOC_FAILED_MSG  "OLED allocation failed"
@@ -58,6 +62,10 @@ static NoopStream g_nullPrintC3;
   #define DISPLAY_BLACK     SH110X_BLACK
   #define DISPLAY_INVERSE   SH110X_INVERSE
   #define SET_BRIGHTNESS(v) display.setContrast(v)
+  // Contrast 0 only blanks the content - the panel stays powered and keeps
+  // drawing current. DISPLAYOFF really turns it off, which is what matters
+  // before deep sleep.
+  #define DISPLAY_OFF()     display.oled_command(SH110X_DISPLAYOFF)
   #define DISPLAY_BEGIN()   display.begin(SCREEN_ADDRESS)
   #define DISPLAY_ROTATION  0
   #define ALLOC_FAILED_MSG  "OLED allocation failed"
@@ -68,6 +76,10 @@ static NoopStream g_nullPrintC3;
   #define DISPLAY_INVERSE   SSD1306_INVERSE
   #define SET_BRIGHTNESS(v) do { display.ssd1306_command(SSD1306_SETCONTRAST); \
                                        display.ssd1306_command(v); } while(0)
+  // Contrast 0 only blanks the content - the panel stays powered and keeps
+  // drawing current. DISPLAYOFF really turns it off, which is what matters
+  // before deep sleep.
+  #define DISPLAY_OFF()     display.ssd1306_command(SSD1306_DISPLAYOFF)
   #define DISPLAY_BEGIN()   display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)
   #define DISPLAY_ROTATION  0
   #define ALLOC_FAILED_MSG  "SSD1306 allocation failed"
@@ -1365,12 +1377,16 @@ applyButtonPins();
   log_e("[DBG setup] DONE - entering loop"); delay(30);
 
 #ifdef TARGET_ESP32C3
-  // Deep sleep resets the chip, so setup() runs on every wake. Re-arm the
-  // "go back to sleep if nothing happened" check so the C3 polls buttons in
-  // short windows instead of staying awake for the full sleep timeout.
-  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER) {
-    sleepPending = true;
-  }
+  // Deep sleep resets the chip, so setup() runs on every wake. Report why we
+  // woke: GPIO means a key/menu press, anything else means the power was
+  // cycled (or a fresh flash). Either way the device now runs normally for the
+  // full sleep timeout before going back to sleep.
+  esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+  const char* wakeName =
+      (cause == ESP_SLEEP_WAKEUP_GPIO)      ? "GPIO (key/menu)" :
+      (cause == ESP_SLEEP_WAKEUP_TIMER)     ? "timer" :
+      (cause == ESP_SLEEP_WAKEUP_UNDEFINED) ? "power-on/reset" : "other";
+  log_e("[DBG sleep] wake cause: %s", wakeName);
 #endif
 }
 
@@ -1559,13 +1575,26 @@ void loop() {
       display.clearDisplay();
       display.display();
       SET_BRIGHTNESS(0);
+      DISPLAY_OFF();
 #ifdef TARGET_ESP32C3
-      // ESP32-C3: ext0/ext1 not available for deep sleep (SOC_PM_SUPPORT_EXT_WAKEUP
-      // undefined). Use timer wakeup: wake every 5 s, loop() checks buttons and
-      // goes back to sleep if nothing pressed. Less power cut than ext0 but
-      // the only deep-sleep GPIO-free option on C3.
-      esp_sleep_enable_timer_wakeup(5000000); // 5 s
-      log_e("[DBG sleep] entering deep sleep (timer wake 5s)...");
+      // ESP32-C3: ext0/ext1 are ESP32-only APIs, but the C3 has its own GPIO
+      // deep-sleep wakeup. Only GPIO0..GPIO5 are RTC pads that can wake it, so
+      // the mask takes the menu button plus whichever keys sit on those pins.
+      // Keys on GPIO6..GPIO10 cannot wake the chip at all - those need a power
+      // cycle. There is deliberately no timer poll: waking every few seconds
+      // re-boots the whole chip (OLED + radio init ~100 mA), which costs far
+      // more than it saves.
+      uint64_t mask = 0;
+      if (MENU_BTN >= 0 && MENU_BTN <= 5) mask |= (1ULL << MENU_BTN);
+      for (int i = 0; i < 8; i++) {
+        if (switchPins[i] >= 0 && switchPins[i] <= 5) mask |= (1ULL << switchPins[i]);
+      }
+      if (mask) {
+        esp_deep_sleep_enable_gpio_wakeup(mask, ESP_GPIO_WAKEUP_GPIO_LOW);
+        log_e("[DBG sleep] deep sleep, wake on gpio mask 0x%llx", mask);
+      } else {
+        log_e("[DBG sleep] deep sleep, no RTC-capable wake pin (reset to wake)");
+      }
 #else
       // ESP32 (original): ext1 only supports ALL_LOW or ANY_HIGH. Buttons are
       // normally HIGH (pull-up) and go LOW when pressed, so we use ext0 on the
@@ -1578,32 +1607,4 @@ void loop() {
       esp_deep_sleep_start();
     }
   }
-
-#ifdef TARGET_ESP32C3
-  // After timer wake, if no button was pressed during the wake window,
-  // go back to sleep immediately to save power.
-  if (sleepPending) {
-    sleepPending = false;
-    bool anyPressed = false;
-    for (int i = 0; i < 8; i++) switches[i].update();
-    menuBtn.update();
-    for (int i = 0; i < 8; i++) {
-      if (switches[i].pressed()) { anyPressed = true; break; }
-    }
-    if (!anyPressed && !menuBtn.pressed() && digitalRead(ENCODER_SW) == HIGH) {
-      bool hasBT = bleKeyboard.isConnected();
-      bool hasUSB = (millis() - lastSerialTime < 3000);
-      if (!hasBT && !hasUSB) {
-        lastConnectionTime = millis();
-        display.clearDisplay();
-        display.display();
-        SET_BRIGHTNESS(0);
-        esp_sleep_enable_timer_wakeup(5000000);
-        log_e("[DBG sleep] timer wake, no activity — back to sleep");
-        delay(100);
-        esp_deep_sleep_start();
-      }
-    }
-  }
-#endif
 }
