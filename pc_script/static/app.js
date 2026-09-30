@@ -22,6 +22,7 @@ let config = {};
 let currentKey = null;
 
 document.addEventListener('DOMContentLoaded', () => {
+    populateTimezoneSelect();
     const toggle = document.getElementById('testModeToggle');
     if (toggle) {
         toggle.addEventListener('change', (e) => {
@@ -34,6 +35,42 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
+// Timezones offered in Settings. The value is a POSIX TZ string that the
+// firmware hands straight to configTzTime(); DST rules live in it, so the
+// clock stays correct year-round instead of drifting with a fixed offset.
+const TZ_OPTIONS = [
+    ["CET-1CEST,M3.5.0,M10.5.0/3", "Europe — Central European Time (CET/CEST)"],
+    ["GMT0BST,M3.5.0/1,M10.5.0", "Europe — London (GMT/BST)"],
+    ["EET-2EEST,M3.5.0/3,M10.5.0/4", "Europe — Eastern European Time (EET/EEST)"],
+    ["MSK-3", "Europe — Moscow (UTC+3)"],
+    ["UTC0", "UTC"],
+    ["<-03>3", "America — São Paulo (UTC-3)"],
+    ["EST5EDT,M3.2.0,M11.1.0", "America — New York (EST/EDT)"],
+    ["CST6CDT,M3.2.0,M11.1.0", "America — Chicago (CST/CDT)"],
+    ["MST7MDT,M3.2.0,M11.1.0", "America — Denver (MST/MDT)"],
+    ["PST8PDT,M3.2.0,M11.1.0", "America — Los Angeles (PST/PDT)"],
+    ["IST-5:30", "Asia — India (UTC+5:30)"],
+    ["CST-8", "Asia — China / Singapore / Hong Kong (UTC+8)"],
+    ["JST-9", "Asia — Tokyo (UTC+9)"],
+    ["KST-9", "Asia — Seoul (UTC+9)"],
+    ["AEST-10AEDT,M10.1.0,M4.1.0/3", "Australia — Sydney (AEST/AEDT)"],
+    ["NZST-12NZDT,M9.5.0,M4.1.0/3", "Pacific — Auckland (NZST/NZDT)"],
+];
+const DEFAULT_TZ = "CET-1CEST,M3.5.0,M10.5.0/3";
+
+function populateTimezoneSelect() {
+    const sel = document.getElementById('appTimezone');
+    if (!sel) return;
+    sel.innerHTML = "";
+    for (const [posix, label] of TZ_OPTIONS) {
+        const opt = document.createElement('option');
+        opt.value = posix;
+        opt.textContent = label;
+        sel.appendChild(opt);
+    }
+    sel.value = DEFAULT_TZ;
+}
+
 const i18n = {
     en: {
         app_title: "BindDeck",
@@ -43,6 +80,8 @@ const i18n = {
         wifi_panel_title: "WiFi (optional backup)",
         wifi_status_label: "Status",
         wifi_send_btn: "Save and send to device",
+        timezone: "Timezone",
+        timezone_hint: "Used by the device clock (NTP). Applies after the next Sync to Device.",
         device_settings: "Device Settings",
         oled_anim: "OLED Animation",
         anim_0: "Expanding Waves",
@@ -133,6 +172,8 @@ const i18n = {
         wifi_panel_title: "WiFi (copia de seguridad)",
         wifi_status_label: "Estado",
         wifi_send_btn: "Guardar y enviar al dispositivo",
+        timezone: "Zona horaria",
+        timezone_hint: "La usa el reloj del dispositivo (NTP). Se aplica tras el siguiente Sincronizar Dispositivo.",
         device_settings: "Ajustes del Dispositivo",
         oled_anim: "Animación OLED",
         anim_0: "Ondas Expansivas",
@@ -223,6 +264,8 @@ const i18n = {
         wifi_panel_title: "WiFi（可选备份）",
         wifi_status_label: "状态",
         wifi_send_btn: "保存并发送到设备",
+        timezone: "时区",
+        timezone_hint: "设备时钟（NTP）使用。点击「同步到设备」后生效。",
         device_settings: "设备设置",
         oled_anim: "OLED 动画",
         anim_0: "扩展波纹",
@@ -436,6 +479,20 @@ async function fetchConfig() {
             if (sleepEl) sleepEl.checked = config.esp32 ? (config.esp32.sleepEnabled !== false) : true;
             const sleepTimeoutEl = document.getElementById('appSleepTimeout');
             if (sleepTimeoutEl) sleepTimeoutEl.value = config.esp32 ? (config.esp32.sleepTimeout || 5) : 5;
+
+            // Device clock timezone. Keep an unknown value selectable instead of
+            // silently blanking it, so it can still be re-sent.
+            const tzEl = document.getElementById('appTimezone');
+            if (tzEl) {
+                const tz = (config.esp32 && config.esp32.tz) || DEFAULT_TZ;
+                if (!Array.from(tzEl.options).some(o => o.value === tz)) {
+                    const opt = document.createElement('option');
+                    opt.value = tz;
+                    opt.textContent = tz;
+                    tzEl.appendChild(opt);
+                }
+                tzEl.value = tz;
+            }
             
             applyTheme(config.app.theme || 'dark');
             applyLanguage(config.app.lang || 'en');
@@ -715,6 +772,8 @@ async function saveSettings(silent = false, force = false) {
     config.esp32.pins = readPinGrid();
     config.esp32.sleepEnabled = document.getElementById('appSleep').checked;
     config.esp32.sleepTimeout = parseInt(document.getElementById('appSleepTimeout').value);
+    const tzSelect = document.getElementById('appTimezone');
+    if (tzSelect && tzSelect.value) config.esp32.tz = tzSelect.value;
 
     if (!config.app) config.app = {};
     config.app.theme = document.getElementById('appTheme').value;

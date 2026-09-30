@@ -278,6 +278,15 @@ int visualVolume = 50;
 int brightness = 255;
 int animMode = 0; // 0: Circles, 1: Flash, 2: Minimal
 int encMode = 0;  // 0: Volume, 1: Vertical Arrows, 2: Horizontal Arrows
+
+// POSIX TZ string used for NTP. Configurable with CFG:TZ:<posix> (the PC app
+// sends it from its timezone picker); previously this was hardcoded to Central
+// European Time, so every other region showed the wrong clock.
+char tzString[64] = "CET-1CEST,M3.5.0,M10.5.0/3";
+
+void applyTimezone() {
+  configTzTime(tzString, "pool.ntp.org");
+}
 int keyAnims[8] = {-1, -1, -1, -1, -1, -1, -1, -1}; // -1 means use global animMode
 String keyTexts[8] = {"", "", "", "", "", "", "", ""};
 int previewAnimOverride = -1;
@@ -300,6 +309,7 @@ void saveConfig() {
   }
   preferences.putBool("sleepEnabled", sleepEnabled);
   preferences.putULong("sleepTimeoutMs", sleepTimeoutMs);
+  preferences.putString("tz", tzString);
   preferences.end();
 }
 
@@ -395,6 +405,12 @@ void loadConfig() {
   sleepEnabled = preferences.getBool("sleepEnabled", true);
   sleepTimeoutMs = preferences.getULong("sleepTimeoutMs", 300000);
   if (sleepTimeoutMs < 60000) sleepTimeoutMs = 300000;
+  String tz = preferences.getString("tz", tzString);
+  tz.trim();
+  if (tz.length() > 0 && tz.length() < (int)sizeof(tzString)) {
+    strncpy(tzString, tz.c_str(), sizeof(tzString) - 1);
+    tzString[sizeof(tzString) - 1] = '\0';
+  }
   preferences.end();
   log_e("[DBG load_config] switchPins={");
   for (int i = 0; i < 8; i++) { log_e("  pin%d=%d%s", i, switchPins[i], (i < 7) ? "," : ""); }
@@ -517,13 +533,28 @@ void processCommand(String data) {
         // Keep the setup AP up so the provisioning page stays reachable.
         WiFi.mode(WIFI_AP_STA);
         WiFi.begin(ssid.c_str(), pwd.c_str());
-  configTzTime("CET-1CEST,M3.5.0,M10.5.0/3", "pool.ntp.org");
+  applyTimezone();
       }
     } else if (data.startsWith("CMD:VERSION")) {
       // VERSION:<fw>,<display>,<chip>,<build>  - lets the app (and us) tell
       // which variant a board is running.
       sendDataToPC(String("VERSION:") + FW_VERSION + "," + FW_DISPLAY + "," +
                    FW_CHIP + "," + FW_BUILD);
+    } else if (data.startsWith("CFG:TZ:")) {
+      // CFG:TZ:<posix tz> - the PC app sends the picked timezone. Everything
+      // after the prefix is the payload, so the commas in DST rules
+      // ("CET-1CEST,M3.5.0,M10.5.0/3") are fine.
+      String tz = data.substring(7);
+      tz.trim();
+      if (tz.length() > 0 && tz.length() < (int)sizeof(tzString)) {
+        strncpy(tzString, tz.c_str(), sizeof(tzString) - 1);
+        tzString[sizeof(tzString) - 1] = '\0';
+        saveConfig();
+        applyTimezone();
+        log_e("[cfg] tz set to %s", tzString);
+      }
+    } else if (data.startsWith("CMD:GET_TZ")) {
+      sendDataToPC(String("TZ_INFO:") + tzString);
     } else if (data.startsWith("CMD:GET_WIFI")) {
       if (WiFi.status() == WL_CONNECTED) {
         preferences.begin("binddeck", true);
@@ -1127,7 +1158,7 @@ static void handleCfgSave() {
   delay(100);
   WiFi.mode(WIFI_AP_STA);          // keep the AP so this page stays reachable
   WiFi.begin(ssid.c_str(), pwd.c_str());
-  configTzTime("CET-1CEST,M3.5.0,M10.5.0/3", "pool.ntp.org");
+  applyTimezone();
   cfgServer.send(200, "text/html; charset=utf-8",
                  "<meta charset='utf-8'><p>已保存，正在连接 <b>" + htmlEsc(ssid) +
                  "</b>…</p><p><a href='/'>返回查看状态</a></p>");
@@ -1150,7 +1181,7 @@ void setupProvisioning() {
   loadWifiCreds(ssid, pwd);
   if (ssid.length()) {
     WiFi.begin(ssid.c_str(), pwd.c_str());
-    configTzTime("CET-1CEST,M3.5.0,M10.5.0/3", "pool.ntp.org");
+    applyTimezone();
     log_e("[cfg] joining saved WiFi '%s'", ssid.c_str());
   } else {
     log_e("[cfg] no saved WiFi - join AP '%s' and open http://%s", apName, apIp.c_str());

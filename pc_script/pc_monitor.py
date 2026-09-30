@@ -369,8 +369,8 @@ def _kbd_send(seq):
         keyboard.send(seq)
 
 
-# Last firmware identity reported by the device (CMD:VERSION).
-fw_info = {"version": "", "display": "", "chip": "", "build": ""}
+# Last firmware identity reported by the device (CMD:VERSION / CMD:GET_TZ).
+fw_info = {"version": "", "display": "", "chip": "", "build": "", "tz": ""}
 
 
 def handle_device_line(line):
@@ -419,6 +419,10 @@ def handle_device_line(line):
             fw_info["build"]   = parts[3].strip() if len(parts) > 3 else ""
         except Exception:
             pass
+    elif line.startswith("TZ_INFO:"):
+        # TZ_INFO:<posix tz> - the value after the prefix is the payload, so
+        # the commas in DST rules are fine.
+        fw_info["tz"] = line[len("TZ_INFO:"):].strip()
     # ACK:<cmd> lines just confirm a CFG: command was applied; nothing to do.
 
 
@@ -701,6 +705,12 @@ def api_config():
                     print(f"[DBG CFG:SLEEP] SENT -> enabled={sleep_enabled} timeout={sleep_timeout}m")
                     time.sleep(0.1)
 
+                # Timezone for the device clock (POSIX TZ string).
+                tz = new_esp32.get("tz")
+                if tz and (force or str(old_esp32.get("tz", "")) != str(tz)):
+                    send_to_device(f"CFG:TZ:{tz}")
+                    time.sleep(0.1)
+
                 # Button GPIOs — only send when the pin set actually changed
                 new_pins = new_esp32.get("pins")
                 old_pins = old_esp32.get("pins")
@@ -785,7 +795,9 @@ def api_fw_version():
     flashed image does not match the selected board variant.
     """
     send_to_device("CMD:VERSION")
-    time.sleep(0.5)
+    time.sleep(0.3)
+    send_to_device("CMD:GET_TZ")
+    time.sleep(0.3)
     return jsonify(fw_info)
 
 @app.route("/api/send_config", methods=["POST"])

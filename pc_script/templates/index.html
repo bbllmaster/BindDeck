@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <title>BindDeck</title>
-    <link rel="stylesheet" href="/static/style.css?v=5">
+    <link rel="stylesheet" href="/static/style.css?v=6">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
@@ -323,6 +323,13 @@
                 </select>
             </div>
 
+            <div class="form-group">
+                <label data-i18n="timezone">Timezone</label>
+                <!-- options are built by app.js from the TZ_OPTIONS table -->
+                <select id="appTimezone"></select>
+                <small data-i18n="timezone_hint">Used by the device clock (NTP). Applies after the next Sync to Device.</small>
+            </div>
+
             <div class="form-group" style="flex-direction: row; align-items: center; gap: 10px;">
                 <input type="checkbox" id="appStartup" style="width: auto;">
                 <label for="appStartup" data-i18n="startup" style="margin:0;">Start with Windows</label>
@@ -453,7 +460,7 @@
         </div>
     </footer>
 
-    <script src="/static/app.js?v=5"></script>
+    <script src="/static/app.js?v=6"></script>
 
     <!-- Guided Tour Overlay -->
     <div id="tutorial-modal" class="tour-overlay" style="display: none;">

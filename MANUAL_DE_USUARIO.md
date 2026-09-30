@@ -98,6 +98,7 @@ The analog knob is your best ally. On the right side panel you can select its op
 ### Brightness, Screen and Sleep
 * Adjust the **OLED Brightness** slider to change the intensity of the screen (ideal for working at night).
 * **Sleep Mode** and the **Sleep Timeout** are configured in **Settings** (gear icon, top right). When the device is idle for that long it turns the OLED off and enters deep sleep to protect the panel — press any key to wake it.
+* The device **Timezone** (for the clock) is in **Settings** too — a list of common zones with their summer-time rules built in.
 
 ### Button GPIOs (advanced — inside Settings)
 Assigning a different GPIO to each physical key is an advanced setting, so it lives in **Settings → Button GPIOs**. There you can reassign a pin per key, **Reset to Default**, or **Save** the new assignment. Reserved pins (used by the encoder, the menu button and the OLED) cannot be assigned.
@@ -109,7 +110,7 @@ Assigning a different GPIO to each physical key is an advanced setting, so it li
 Press the **menu button** to cycle through the four screens:
 
 1. **PC statistics** — CPU / GPU temperature and load.
-2. **Clock** — synchronised automatically over Wi-Fi (NTP). Note: the timezone is currently fixed to Central European Time, so the clock only shows the right local time in that zone.
+2. **Clock** — synchronised automatically over Wi-Fi (NTP). Set your timezone in **Settings → Timezone**; it is sent to the device on the next sync (the factory default is Central European Time).
 3. **Eyes** — the interactive idle animation.
 4. **Device info** — chip, display driver, firmware version and build date.
 
@@ -259,6 +260,7 @@ El mando analógico es tu mejor aliado. En el panel lateral derecho puedes selec
 ### Brillo, Pantalla y Reposo
 * Ajusta el control deslizante de **Brillo OLED** para cambiar la intensidad de la pantalla (ideal para trabajar de noche).
 * El **Modo Reposo** y el **Tiempo de Reposo** se configuran en **Ajustes** (icono de engranaje, arriba a la derecha). Cuando el dispositivo queda inactivo ese tiempo, apaga el OLED y entra en sueño profundo para proteger el panel — pulsa cualquier tecla para despertarlo.
+* La **Zona horaria** del reloj también está en **Ajustes** — una lista de zonas comunes con sus reglas de horario de verano ya incluidas.
 
 ### GPIOs de los Botones (avanzado — dentro de Ajustes)
 Asignar un GPIO distinto a cada tecla física es un ajuste avanzado, así que vive en **Ajustes → GPIOs de Botones**. Ahí puedes reasignar el pin de cada tecla, **Restablecer valores** o **Guardar** la nueva asignación. Los pines reservados (usados por el encoder, el botón de menú y el OLED) no se pueden asignar.
@@ -270,7 +272,7 @@ Asignar un GPIO distinto a cada tecla física es un ajuste avanzado, así que vi
 Pulsa el **botón de menú** para recorrer las cuatro pantallas:
 
 1. **Estadísticas del PC** — temperatura y carga de CPU / GPU.
-2. **Reloj** — se sincroniza automáticamente por Wi-Fi (NTP). Nota: la zona horaria está fijada actualmente a Europa Central, así que el reloj solo muestra la hora local correcta en esa zona.
+2. **Reloj** — se sincroniza automáticamente por Wi-Fi (NTP). Elige tu zona horaria en **Ajustes → Zona horaria**; se envía al dispositivo en la siguiente sincronización (la de fábrica es Europa Central).
 3. **Ojos** — la animación interactiva de reposo.
 4. **Información del dispositivo** — chip, controlador de pantalla, versión de firmware y fecha de compilación.
 
@@ -421,6 +423,7 @@ Sep 30 2026 03:23:00
 ### 亮度、屏幕与休眠
 * 拖动 **OLED 亮度** 滑块调节屏幕强度（夜里用很合适）。
 * **休眠模式**和**休眠时间**在 **设置**（右上角齿轮图标）里配置。设备闲置超过该时间后，会关闭 OLED 并进入深度睡眠以保护面板 —— **按任意键唤醒**。
+* 时钟的**时区**也在 **设置** 里 —— 内置常用时区列表，夏令时规则已经包含在字符串里，不用手动调。
 
 ### 按键 GPIO（高级 —— 在设置里）
 给每个物理按键分配不同的 GPIO 属于高级设置，所以它放在 **设置 → 按键 GPIO**。在那里可以逐个改引脚、**恢复默认**、或**保存**。保留引脚（旋钮、菜单键、OLED 占用的）不能分配。
@@ -432,7 +435,7 @@ Sep 30 2026 03:23:00
 按**菜单键**循环 4 个界面：
 
 1. **电脑状态** —— CPU / GPU 温度与占用。
-2. **时钟** —— 通过 WiFi 走 NTP 自动同步（注意：时区目前固定为中欧时间，其他地区显示会不准）。
+2. **时钟** —— 通过 WiFi 走 NTP 自动同步。时区在 **设置 → 时区** 里选，下次「同步到设备」时下发（出厂默认为中欧时间）。
 3. **眼睛** —— 交互式待机动画。
 4. **设备信息** —— 芯片、屏幕驱动、固件版本、编译时间。
 
