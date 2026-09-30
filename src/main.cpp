@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#include <BleKeyboard.h>
+#include "nimble_hid.h"   // C3: from-scratch NimBLE HID; other targets: t-vk
 #include <Wire.h>
 #include <esp_log.h>
 #include <Adafruit_GFX.h>
