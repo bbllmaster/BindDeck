@@ -8,6 +8,7 @@
 #include "RoboEyes.h"
 #include <WiFi.h>
 #include <WiFiUdp.h>
+#include <WebServer.h>
 #include <esp_sleep.h>
 #include <esp_timer.h>
 
@@ -71,18 +72,25 @@ static NoopStream g_nullPrintC3;
   #define ALLOC_FAILED_MSG  "SSD1306 allocation failed"
 #endif
 
-const char* WIFI_SSID = "AIRCONECT_FIBRA-5865_5G";
-const char* WIFI_PASSWORD = "ZnP8A6F53bMV[{I,";
+// WiFi credentials are NOT hardcoded. They are provisioned on the device: in
+// config mode it raises its own access point and serves a small web page where
+// you pick a network and type the password. The credentials are then stored in
+// NVS. These empty fallbacks only exist so nothing ever calls WiFi.begin() with
+// a garbage SSID.
+const char* WIFI_SSID = "";
+const char* WIFI_PASSWORD = "";
 WiFiUDP udp;
+static WebServer cfgServer(80);   // provisioning portal, config mode only
 
-// On ESP32-C3 WiFi and BLE share one 2.4 GHz radio. Leaving WiFi STA up during
+// On ESP32-C3 WiFi and BLE share one 2.4 GHz radio. Leaving WiFi up during
 // normal use makes the BLE HID link flap (connect/disconnect) even with a single
 // host. So WiFi is OFF by default and only started in an explicit "config mode"
-// (hold the encoder button while powering on). Config mode connects WiFi + opens
-// the UDP CFG channel for ~CONFIG_MODE_MS, then reboots back into BLE-only.
+// (hold the encoder button while powering on). Config mode raises a setup AP for
+// provisioning and, if credentials exist, also joins that network so the PC app
+// can reach the UDP CFG channel on port 4210.
 static bool g_configMode = false;
 static unsigned long g_configModeStart = 0;
-const unsigned long CONFIG_MODE_MS = 60000;
+const unsigned long CONFIG_MODE_MS = 300000;   // 5 min - enough to provision
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -478,7 +486,8 @@ void processCommand(String data) {
         preferences.end();
         WiFi.disconnect(true, true);
         delay(100);
-        WiFi.mode(WIFI_STA);
+        // Keep the setup AP up so the provisioning page stays reachable.
+        WiFi.mode(WIFI_AP_STA);
         WiFi.begin(ssid.c_str(), pwd.c_str());
   configTzTime("CET-1CEST,M3.5.0,M10.5.0/3", "pool.ntp.org");
       }
@@ -956,21 +965,137 @@ void handleEncoderAction(bool forward) {
   }
 }
 
-void setupWiFi() {
+// --- WiFi provisioning (no hardcoded credentials) --------------------------
+// Credentials live in NVS. Empty = never provisioned.
+static void loadWifiCreds(String& ssid, String& pwd) {
   preferences.begin("binddeck", true);
-  String ssid = preferences.getString("wifiSSID", WIFI_SSID);
-  String pwd = preferences.getString("wifiPwd", WIFI_PASSWORD);
+  ssid = preferences.getString("wifiSSID", "");
+  pwd  = preferences.getString("wifiPwd", "");
   preferences.end();
+}
 
-  // On first boot the NVS keys don't exist yet; getString returns the
-  // default, but if it ever comes back empty fall back to the hardcoded
-  // credentials so WiFi.begin() doesn't get a NULL/empty SSID.
-  if (ssid.length() == 0) ssid = WIFI_SSID;
-  if (pwd.length() == 0) pwd = WIFI_PASSWORD;
+static void saveWifiCreds(const String& ssid, const String& pwd) {
+  preferences.begin("binddeck", false);
+  preferences.putString("wifiSSID", ssid);
+  preferences.putString("wifiPwd", pwd);
+  preferences.end();
+}
 
-  WiFi.mode(WIFI_STA);
+static String htmlEsc(const String& s) {
+  String o;
+  o.reserve(s.length());
+  for (unsigned int i = 0; i < s.length(); i++) {
+    char c = s.charAt(i);
+    if      (c == '<') o += "&lt;";
+    else if (c == '>') o += "&gt;";
+    else if (c == '&') o += "&amp;";
+    else if (c == '"') o += "&quot;";
+    else if (c == '\'') o += "&#39;";
+    else o += c;
+  }
+  return o;
+}
+
+static String cfgPage() {
+  String ssid, pwd;
+  loadWifiCreds(ssid, pwd);
+
+  String h = F("<!DOCTYPE html><html><head><meta charset='utf-8'>"
+    "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+    "<title>BindDeck</title></head>"
+    "<body style='font-family:sans-serif;max-width:440px;margin:24px auto;padding:0 16px'>"
+    "<h2>BindDeck WiFi 配网</h2><p>状态: ");
+  if (WiFi.status() == WL_CONNECTED) {
+    h += "已连接 <b>" + htmlEsc(WiFi.SSID()) + "</b> · IP " + WiFi.localIP().toString();
+  } else if (ssid.length()) {
+    h += "未连上，已保存 <b>" + htmlEsc(ssid) + "</b>，正在重试…";
+  } else {
+    h += "尚未配置";
+  }
+  h += F("</p><form method='POST' action='/save'>"
+         "<label>WiFi 名称</label><br>"
+         "<input name='ssid' list='nets' autocomplete='off' "
+         "style='width:100%;padding:8px;box-sizing:border-box' value='");
+  h += htmlEsc(ssid);
+  h += F("'><br><br><label>密码</label><br>"
+         "<input name='pwd' type='password' "
+         "style='width:100%;padding:8px;box-sizing:border-box' value='");
+  h += htmlEsc(pwd);
+  h += F("'><br><br><button style='padding:10px 20px'>保存并连接</button></form>");
+
+  // Nearby networks as an autocomplete list (no JS needed).
+  int n = WiFi.scanNetworks();
+  if (n > 0) {
+    h += F("<datalist id='nets'>");
+    for (int i = 0; i < n && i < 20; i++) {
+      h += "<option value='" + htmlEsc(WiFi.SSID(i)) + "'>";
+    }
+    h += F("</datalist><p>附近网络（点击输入框选择）:</p><ul>");
+    for (int i = 0; i < n && i < 12; i++) {
+      h += "<li>" + htmlEsc(WiFi.SSID(i)) + " (" + String(WiFi.RSSI(i)) + " dBm)</li>";
+    }
+    h += F("</ul>");
+  }
+  h += F("<p style='color:#888'>设备只在配网模式开热点；配好后回到蓝牙模式，WiFi 会关闭。</p>"
+         "</body></html>");
+  return h;
+}
+
+static void handleCfgRoot() {
+  cfgServer.send(200, "text/html; charset=utf-8", cfgPage());
+}
+
+static void handleCfgSave() {
+  String ssid = cfgServer.arg("ssid");
+  String pwd  = cfgServer.arg("pwd");
+  ssid.trim();
+  if (ssid.length() == 0) {
+    cfgServer.send(400, "text/html; charset=utf-8",
+                   "<meta charset='utf-8'><p>WiFi 名称不能为空。<a href='/'>返回</a></p>");
+    return;
+  }
+  saveWifiCreds(ssid, pwd);
+  log_e("[cfg] saved WiFi ssid='%s'", ssid.c_str());
+  WiFi.disconnect(true, true);
+  delay(100);
+  WiFi.mode(WIFI_AP_STA);          // keep the AP so this page stays reachable
   WiFi.begin(ssid.c_str(), pwd.c_str());
   configTzTime("CET-1CEST,M3.5.0,M10.5.0/3", "pool.ntp.org");
+  cfgServer.send(200, "text/html; charset=utf-8",
+                 "<meta charset='utf-8'><p>已保存，正在连接 <b>" + htmlEsc(ssid) +
+                 "</b>…</p><p><a href='/'>返回查看状态</a></p>");
+}
+
+void setupProvisioning() {
+  // AP so a phone can reach the config page; STA so the device can join the
+  // home network and then be reached by the PC app over UDP 4210.
+  WiFi.mode(WIFI_AP_STA);
+
+  uint8_t mac[6];
+  WiFi.macAddress(mac);
+  char apName[32];
+  snprintf(apName, sizeof(apName), "BindDeck-%02X%02X", mac[4], mac[5]);
+  WiFi.softAP(apName);             // open AP, up only while in config mode
+  String apIp = WiFi.softAPIP().toString();
+  log_e("[cfg] AP '%s' up at http://%s", apName, apIp.c_str());
+
+  String ssid, pwd;
+  loadWifiCreds(ssid, pwd);
+  if (ssid.length()) {
+    WiFi.begin(ssid.c_str(), pwd.c_str());
+    configTzTime("CET-1CEST,M3.5.0,M10.5.0/3", "pool.ntp.org");
+    log_e("[cfg] joining saved WiFi '%s'", ssid.c_str());
+  } else {
+    log_e("[cfg] no saved WiFi - join AP '%s' and open http://%s", apName, apIp.c_str());
+  }
+
+  cfgServer.on("/", HTTP_GET, handleCfgRoot);
+  cfgServer.on("/save", HTTP_POST, handleCfgSave);
+  cfgServer.onNotFound([]() {
+    cfgServer.sendHeader("Location", "/", true);
+    cfgServer.send(302, "text/plain", "");
+  });
+  cfgServer.begin();
 }
 
 void loopWiFi() {
@@ -1026,8 +1151,8 @@ void setup() {
     if (triggered) {
       g_configMode = true;
       g_configModeStart = millis();
-      log_e("[DBG setup] CONFIG MODE (encoder btn held 2s) - starting WiFi");
-      setupWiFi();
+      log_e("[DBG setup] CONFIG MODE (encoder btn held 2s) - AP + WiFi + portal");
+      setupProvisioning();
     } else {
       log_e("[DBG setup] normal mode - WiFi OFF (BLE only)");
     }
@@ -1116,11 +1241,14 @@ void loop() {
   _loopCount++;
   if (_loopCount <= 3) { log_e("[DBG loop] iter %d", _loopCount); delay(30); }
 
-  // Config mode: WiFi is on to expose the UDP CFG channel. BLE stays on and the
-  // normal loop keeps running (OLED draws, keyboard works). Exit by holding the
-  // encoder button ~1s, or it auto-disables WiFi after the timeout. There is NO
-  // reboot path here, so a stuck button can never cause a boot loop.
+  // Config mode: the setup AP + web portal are up so you can provision WiFi,
+  // and the UDP CFG channel is exposed so the PC app can reach the device.
+  // BLE stays on and the normal loop keeps running (OLED draws, keyboard
+  // works). Exit by holding the encoder button ~1s, or it auto-disables WiFi
+  // after the timeout. There is NO reboot path, so a stuck button can never
+  // cause a boot loop.
   if (g_configMode) {
+    cfgServer.handleClient();
     loopWiFi();
     static unsigned long _cfgExitHold = 0;
     if (digitalRead(ENCODER_SW) == LOW) {
