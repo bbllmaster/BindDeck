@@ -135,6 +135,7 @@ static unsigned long g_configModeStart = 0;
 const unsigned long CONFIG_MODE_MS = 300000;   // 5 min - enough to provision
 static String g_cfgApName;   // the "BindDeck-XXXX" AP name, shown on OLED
 static String g_cfgApIp;     // the AP IP (192.168.4.1), shown on OLED
+static int g_otaProgress = -1;  // -1 = not uploading; 0..100 = percent
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -1109,6 +1110,28 @@ void drawConfigScreen() {
   display.display();
 }
 
+// Shown on the OLED while a firmware OTA upload is in progress over the
+// config-mode web page, so the user sees it actually advancing (and knows not
+// to power off). Replaces the config screen while g_otaProgress >= 0.
+void drawOtaProgress() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(DISPLAY_WHITE);
+  display.setCursor(0, 0);
+  display.println("OTA upgrade");
+  display.setCursor(0, 16);
+  display.println("uploading...");
+  int barX = 10, barW = SCREEN_WIDTH - 20, barH = 10, barY = 34;
+  display.drawRect(barX, barY, barW, barH, DISPLAY_WHITE);
+  display.fillRect(barX + 1, barY + 1,
+                  map(g_otaProgress, 0, 100, 0, barW - 2), barH - 2, DISPLAY_WHITE);
+  display.setCursor(0, 50);
+  display.print("  ");
+  display.print(g_otaProgress);
+  display.println("%");
+  display.display();
+}
+
 void drawMenu() {
   display.clearDisplay();
   display.setTextSize(1);
@@ -1267,11 +1290,19 @@ void setupProvisioning() {
   WiFi.macAddress(mac);
   char apName[32];
   snprintf(apName, sizeof(apName), "BindDeck-%02X%02X", mac[4], mac[5]);
-  WiFi.softAP(apName);             // open AP, up only while in config mode
+  // Explicit softAP config: a fixed IP/gateway/subnet + a fixed channel makes
+  // the AP reliable. The default softAP() leaves these to the stack and, with
+  // BLE contending for the same 2.4GHz radio, the client often sees the AP in
+  // the scan list but can't associate / can't get a DHCP lease.
+  WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1),
+                    IPAddress(255, 255, 255, 0));
+  WiFi.softAP(apName, NULL, 6, 4);  // open AP, channel 6, max 4 clients
   String apIp = WiFi.softAPIP().toString();
-  g_cfgApName = apName;            // shown on OLED while in config mode
+  g_cfgApName = apName;             // shown on OLED while in config mode
   g_cfgApIp = apIp;
-  log_e("[cfg] AP '%s' up at http://%s", apName, apIp.c_str());
+  log_e("[cfg] AP '%s' up at http://%s (ch6)", apName, apIp.c_str());
+  log_e("[cfg] softAP IP=%s  staIP=%s  status=%d", apIp.c_str(),
+        WiFi.localIP().toString().c_str(), (int)WiFi.status());
 
   String ssid, pwd;
   loadWifiCreds(ssid, pwd);
@@ -1315,17 +1346,21 @@ void setupProvisioning() {
     []() {  // upload callback, called repeatedly with chunks
       HTTPUpload& upload = cfgServer.upload();
       if (upload.status == UPLOAD_FILE_START) {
+        g_otaProgress = 0;
         log_e("[ota] start: %s", upload.filename.c_str());
         if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
           Update.printError(Serial);
           log_e("[ota] Update.begin failed (partition full?)");
         }
       } else if (upload.status == UPLOAD_FILE_WRITE) {
+        if (upload.totalSize > 0)
+          g_otaProgress = (int)(upload.currentSize * 100 / upload.totalSize);
         if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
           Update.printError(Serial);
           log_e("[ota] Update.write failed");
         }
       } else if (upload.status == UPLOAD_FILE_END) {
+        g_otaProgress = 100;
         if (Update.end(true)) {
           log_e("[ota] done, %u bytes, will reboot", upload.totalSize);
         } else {
@@ -1740,7 +1775,8 @@ void loop() {
 #endif
     
     if (g_configMode) {
-      drawConfigScreen();   // hotspot AP name + URL, replaces idle screens
+      if (g_otaProgress >= 0) drawOtaProgress();  // OTA upload in progress
+      else drawConfigScreen();                    // hotspot AP name + URL
     } else if (currentState == STATE_IDLE) {
       if (currentIdleScreen == 0) {
         drawIdle(); // PC Stats
