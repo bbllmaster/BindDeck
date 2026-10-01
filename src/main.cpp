@@ -217,6 +217,7 @@ static void encoderTimerCb(void* arg) {
 // (Defined above inside the TARGET_ESP32C3 conditional block.)
 int switchPins[8];  // current pin for each button, populated from Preferences
 const uint8_t MACRO_KEYS[8] = {KEY_F13, KEY_F14, KEY_F15, KEY_F16, KEY_F17, KEY_F18, KEY_F19, KEY_F20};
+int buttonKeys[8];  // per-button BLE key code (CFG:KEYS:), defaults to MACRO_KEYS
 
 // GPIOs already in use by other peripherals — not available for buttons.
 #ifdef TARGET_ESP32C3
@@ -331,6 +332,11 @@ void saveConfig() {
     sprintf(key, "pin%d", i);
     preferences.putInt(key, switchPins[i]);
   }
+  for(int i=0; i<8; i++) {   // per-button key code (what the button sends)
+    char key[10];
+    sprintf(key, "key%d", i);
+    preferences.putInt(key, buttonKeys[i]);
+  }
   preferences.putBool("sleepEnabled", sleepEnabled);
   preferences.putULong("sleepTimeoutMs", sleepTimeoutMs);
   preferences.putString("tz", tzString);
@@ -388,6 +394,7 @@ void loadConfig() {
     animMode = 0; encMode = 0; brightness = 255;
     for (int i = 0; i < 8; i++) { keyAnims[i] = -1; keyTexts[i] = ""; }
     for (int i = 0; i < 8; i++) switchPins[i] = DEFAULT_SWITCH_PINS[i];
+    for (int i = 0; i < 8; i++) buttonKeys[i] = MACRO_KEYS[i];
     return;
   }
   animMode = preferences.getInt("animMode", 0);
@@ -425,6 +432,11 @@ void loadConfig() {
     for (int i = 0; i < 8; i++) switchPins[i] = DEFAULT_SWITCH_PINS[i];
   } else {
     for (int i = 0; i < 8; i++) switchPins[i] = loaded[i];
+  }
+  for (int i = 0; i < 8; i++) {   // per-button key code
+    char key[10];
+    sprintf(key, "key%d", i);
+    buttonKeys[i] = preferences.getInt(key, MACRO_KEYS[i]);
   }
   sleepEnabled = preferences.getBool("sleepEnabled", true);
   sleepTimeoutMs = preferences.getULong("sleepTimeoutMs", 300000);
@@ -538,6 +550,29 @@ void processCommand(String data) {
       Serial.println("}");
     } else {
       log_e("[DBG CFG:PINS] REJECTED — keeping previous switchPins");
+    }
+    // Invalid payloads are silently ignored — device keeps its last valid config.
+} else if (data.startsWith("CFG:KEYS:")) {
+    // CFG:KEYS:4,5,6,7,8,9,10,11  — one USB HID key code per button
+    String payload = data.substring(9);
+    int newKeys[8];
+    int n = 0;
+    while (n < 8 && payload.length() > 0) {
+      int comma = payload.indexOf(',');
+      String token = (comma == -1) ? payload : payload.substring(0, comma);
+      token.trim();
+      newKeys[n++] = token.toInt();
+      if (comma == -1) break;
+      payload = payload.substring(comma + 1);
+    }
+    if (n == 8) {
+      for (int i = 0; i < 8; i++) buttonKeys[i] = newKeys[i];
+      saveConfig();
+      Serial.print("[DBG CFG:KEYS] APPLIED buttonKeys={");
+      for (int i = 0; i < 8; i++) { Serial.print(buttonKeys[i]); if (i < 7) Serial.print(","); }
+      Serial.println();
+    } else {
+      log_e("[DBG CFG:KEYS] REJECTED — expected 8 comma-separated key codes");
     }
     // Invalid payloads are silently ignored — device keeps its last valid config.
 } else if (data.startsWith("CFG:WIFI:")) {
@@ -1288,7 +1323,46 @@ static String cfgPage() {
          "休眠延时(分钟):<input name='sleeptime' type='number' min='1' value='");
   h += String(sleepTimeoutMs / 60000);
   h += F("' style='width:60px'></p>"
-         "<button style='padding:10px 20px'>保存按键配置</button>"
+         "<p><b>按钮行为事件（每个按键发送的键）</b>:</p>");
+  // Common keys use the same encoding the firmware's press() expects:
+  //   - letters/numbers = ASCII code (ASCII_MAP handles them)
+  //   - F1-F24 / arrows / editing keys = HID usage + 0x88
+  //   - modifiers = 0x80..0x87
+  static const struct { const char* label; uint8_t code; } keyOpts[] = {
+    {"F13",0xF0},{"F14",0xF1},{"F15",0xF2},{"F16",0xF3},
+    {"F17",0xF4},{"F18",0xF5},{"F19",0xF6},{"F20",0xF7},
+    {"F1",0xC2},{"F2",0xC3},{"F3",0xC4},{"F4",0xC5},
+    {"F5",0xC6},{"F6",0xC7},{"F7",0xC8},{"F8",0xC9},
+    {"F9",0xCA},{"F10",0xCB},{"F11",0xCC},{"F12",0xCD},
+    {"Esc",0xB1},{"Tab",0xB3},{"Enter",0xB0},{"Space",0xB4},{"Bksp",0xB2},
+    {"A",0x41},{"B",0x42},{"C",0x43},{"D",0x44},{"E",0x45},
+    {"F",0x46},{"G",0x47},{"H",0x48},{"I",0x49},{"J",0x4A},
+    {"K",0x4B},{"L",0x4C},{"M",0x4D},{"N",0x4E},{"O",0x4F},
+    {"P",0x50},{"Q",0x51},{"R",0x52},{"S",0x53},{"T",0x54},
+    {"U",0x55},{"V",0x56},{"W",0x57},{"X",0x58},{"Y",0x59},{"Z",0x5A},
+    {"a",0x61},{"b",0x62},{"c",0x63},{"d",0x64},{"e",0x65},
+    {"f",0x66},{"g",0x67},{"h",0x68},{"i",0x69},{"j",0x6A},
+    {"k",0x6B},{"l",0x6C},{"m",0x6D},{"n",0x6E},{"o",0x6F},
+    {"p",0x70},{"q",0x71},{"r",0x72},{"s",0x73},{"t",0x74},
+    {"u",0x75},{"v",0x76},{"w",0x77},{"x",0x78},{"y",0x79},{"z",0x7A},
+    {"LC",0x80},{"LS",0x81},{"LA",0x82},{"LG",0x83},
+    {"RC",0x84},{"RS",0x85},{"RA",0x86},{"RG",0x87},
+    {"→",0xD7},{"←",0xD8},{"↑",0xD9},{"↓",0xDA},
+    {"Home",0xD2},{"End",0xD5},{"PgUp",0xD3},{"PgDn",0xD6},
+    {"Ins",0xD1},{"Del",0xD4},
+  };
+  const int nKeyOpts = (int)(sizeof(keyOpts)/sizeof(keyOpts[0]));
+  for (int i = 0; i < 8; i++) {
+    h += "<p style='margin:4px 0'><b>按键" + String(i+1) + "</b> "
+         "<select name='key" + String(i) + "' style='width:100%'>"; 
+    for (int k = 0; k < nKeyOpts; k++) {
+      h += "<option value='" + String(keyOpts[k].code) + "'";
+      if (keyOpts[k].code == buttonKeys[i]) h += " selected";
+      h += ">" + String(keyOpts[k].label) + "</option>";
+    }
+    h += "</select></p>";
+  }
+  h += F("<button style='padding:10px 20px'>保存按键配置</button>"
          "</form>"
          "<p style='color:#888;font-size:12px'>这些设置和上位机发送的 CFG: 命令是同一套，改完立即生效并保存到设备。</p>");
 
@@ -1319,6 +1393,12 @@ static void handleCfgKeys() {
   String st = cfgServer.arg("sleeptime");
   if (st.length() == 0) st = "5";
   processCommand(String("CFG:SLEEP:") + (sleepArg == "1" ? "1" : "0") + "," + st);
+  String keys;
+  for (int i = 0; i < 8; i++) {
+    if (i) keys += ",";
+    keys += cfgServer.arg("key" + String(i));
+  }
+  processCommand("CFG:KEYS:" + keys);
 
   cfgServer.send(200, "text/html; charset=utf-8",
     "<meta charset='utf-8'><meta http-equiv='refresh' content='0;url=/'>"
@@ -1784,7 +1864,7 @@ void loop() {
       if(switches[i].pressed()) {
         log_e("[DBG btn] i=%d pressed (ble=%d)", i, (int)bleKeyboard.isConnected());
         if(bleKeyboard.isConnected()) {
-          bleKeyboard.press(MACRO_KEYS[i]);
+          bleKeyboard.press(buttonKeys[i]);
           delay(10);
           bleKeyboard.releaseAll();
         }
