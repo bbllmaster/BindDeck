@@ -133,6 +133,8 @@ static WebServer cfgServer(80);   // provisioning portal, config mode only
 static bool g_configMode = false;
 static unsigned long g_configModeStart = 0;
 const unsigned long CONFIG_MODE_MS = 300000;   // 5 min - enough to provision
+static String g_cfgApName;   // the "BindDeck-XXXX" AP name, shown on OLED
+static String g_cfgApIp;     // the AP IP (192.168.4.1), shown on OLED
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -1084,6 +1086,29 @@ void drawInfoScreen() {
   display.display();
 }
 
+// Shown on the OLED while in config/hotspot mode so the user can see the AP
+// name and the URL to open (no need to dig through a phone's WiFi list).
+void drawConfigScreen() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(DISPLAY_WHITE);
+
+  display.setCursor(0, 0);
+  display.println("WiFi Hotspot");
+
+  display.setCursor(0, 12);
+  display.print("AP: ");
+  display.println(g_cfgApName);
+
+  display.setCursor(0, 24);
+  display.println(g_cfgApIp);
+
+  display.setCursor(0, 36);
+  display.println("hold enc to exit");
+
+  display.display();
+}
+
 void drawMenu() {
   display.clearDisplay();
   display.setTextSize(1);
@@ -1244,6 +1269,8 @@ void setupProvisioning() {
   snprintf(apName, sizeof(apName), "BindDeck-%02X%02X", mac[4], mac[5]);
   WiFi.softAP(apName);             // open AP, up only while in config mode
   String apIp = WiFi.softAPIP().toString();
+  g_cfgApName = apName;            // shown on OLED while in config mode
+  g_cfgApIp = apIp;
   log_e("[cfg] AP '%s' up at http://%s", apName, apIp.c_str());
 
   String ssid, pwd;
@@ -1712,7 +1739,9 @@ void loop() {
     }
 #endif
     
-    if (currentState == STATE_IDLE) {
+    if (g_configMode) {
+      drawConfigScreen();   // hotspot AP name + URL, replaces idle screens
+    } else if (currentState == STATE_IDLE) {
       if (currentIdleScreen == 0) {
         drawIdle(); // PC Stats
       } else if (currentIdleScreen == 1) {
