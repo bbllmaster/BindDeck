@@ -1251,6 +1251,47 @@ static String cfgPage() {
     }
     h += F("</ul>");
   }
+
+  // --- Key/device behavior configuration (same CFG commands the PC app sends) ---
+  h += F("<h3>按键行为配置</h3>"
+         "<form method='POST' action='/keys'>"
+         "<p><b>8 个按键对应的 GPIO</b>（按实际接线修改）:</p>"
+         "<table style='width:100%;border-collapse:collapse'>");
+  for (int i = 0; i < 8; i++) {
+    h += "<tr><td style='padding:2px 6px;border:1px solid #ddd;white-space:nowrap'>按键" + String(i+1) + "</td>"
+         "<td style='padding:2px'><input name='pin" + String(i) + "' type='number' min='0' max='39' "
+         "value='" + String(switchPins[i]) + "' style='width:64px'></td></tr>";
+  }
+  h += F("</table>"
+         "<p><b>编码器模式</b>:<br>"
+         "<select name='enc' style='width:100%;padding:8px'>"
+         "<option value='0'>0 音量</option>"
+         "<option value='1'>1 缩放 (Ctrl+/-)</option>"
+         "<option value='2'>2 浏览器标签页</option>"
+         "<option value='3'>3 撤销/重做</option>"
+         "<option value='5'>5 应用音量</option>"
+         "</select></p>"
+         "<p><b>亮度</b>:<br>"
+         "<input name='bright' type='range' min='0' max='255' value='");
+  h += String(brightness);
+  h += F("' style='width:100%'>"
+         "<p><b>屏幕动画</b>:<br>"
+         "<select name='anim' style='width:100%;padding:8px'>"
+         "<option value='0'>0 圆圈</option>"
+         "<option value='1'>1 闪烁</option>"
+         "<option value='2'>2 极简</option>"
+         "</select></p>"
+         "<p><b>自动休眠</b>:<br>"
+         "<label><input name='sleep' type='checkbox' value='1'");
+  if (sleepEnabled) h += F(" checked");
+  h += F("> 启用休眠</label><br>"
+         "休眠延时(分钟):<input name='sleeptime' type='number' min='1' value='");
+  h += String(sleepTimeoutMs / 60000);
+  h += F("' style='width:60px'></p>"
+         "<button style='padding:10px 20px'>保存按键配置</button>"
+         "</form>"
+         "<p style='color:#888;font-size:12px'>这些设置和上位机发送的 CFG: 命令是同一套，改完立即生效并保存到设备。</p>");
+
   h += F("<p><a href='/update'>→ 固件 OTA 升级（无线刷机）</a></p>");
   h += F("<p style='color:#888'>设备只在配网模式开热点；配好后回到蓝牙模式，WiFi 会关闭。</p>"
          "</body></html>");
@@ -1259,6 +1300,29 @@ static String cfgPage() {
 
 static void handleCfgRoot() {
   cfgServer.send(200, "text/html; charset=utf-8", cfgPage());
+}
+
+// POST /keys - apply the key-behavior form on the config page. Reuses the same
+// CFG: command parser the PC app uses, so the behavior is identical whether the
+// setting came from the host app or the hotspot page.
+static void handleCfgKeys() {
+  String pins;
+  for (int i = 0; i < 8; i++) {
+    if (i) pins += ",";
+    pins += cfgServer.arg("pin" + String(i));
+  }
+  processCommand("CFG:PINS:" + pins);
+  processCommand("CFG:ENC:" + cfgServer.arg("enc"));
+  processCommand("CFG:BRIGHT:" + cfgServer.arg("bright"));
+  processCommand("CFG:ANIM:" + cfgServer.arg("anim"));
+  String sleepArg = cfgServer.arg("sleep");
+  String st = cfgServer.arg("sleeptime");
+  if (st.length() == 0) st = "5";
+  processCommand(String("CFG:SLEEP:") + (sleepArg == "1" ? "1" : "0") + "," + st);
+
+  cfgServer.send(200, "text/html; charset=utf-8",
+    "<meta charset='utf-8'><meta http-equiv='refresh' content='0;url=/'>"
+    "<p>按键配置已保存，设备正在应用新设置。</p><p><a href='/'>返回配网页</a></p>");
 }
 
 static void handleCfgSave() {
@@ -1317,6 +1381,7 @@ void setupProvisioning() {
 
   cfgServer.on("/", HTTP_GET, handleCfgRoot);
   cfgServer.on("/save", HTTP_POST, handleCfgSave);
+  cfgServer.on("/keys", HTTP_POST, handleCfgKeys);
 
   // --- Firmware OTA (config-mode / AP only) ---------------------------------
   // Only reachable while the device is in config mode (the portal/AP is only
