@@ -136,6 +136,7 @@ const unsigned long CONFIG_MODE_MS = 300000;   // 5 min - enough to provision
 static String g_cfgApName;   // the "BindDeck-XXXX" AP name, shown on OLED
 static String g_cfgApIp;     // the AP IP (192.168.4.1), shown on OLED
 static int g_otaProgress = -1;  // -1 = not uploading; 0..100 = percent
+static bool g_bleStarted = false;  // true once bleKeyboard.begin() has run
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -1569,9 +1570,16 @@ void setup() {
     processCommand(cmd);
   };
   log_e("[DBG setup] ble begin..."); delay(30);
-  if (g_nvsOk) {
+  if (g_nvsOk && !g_configMode) {
     bleKeyboard.begin();
+    g_bleStarted = true;
     log_e("[DBG setup] ble ok"); delay(30);
+  } else if (g_configMode) {
+    // BLE is left OFF during config mode: BLE and the softAP share one 2.4GHz
+    // radio, and BLE advertising/connections were starving the AP - clients
+    // saw "BindDeck-XXXX" but couldn't associate. BLE is started again when
+    // config mode exits (see loop()). The keyboard works again right away.
+    log_e("[DBG setup] BLE deferred (config mode) - radio kept free for the AP");
   } else {
     // Last-resort guard: if NVS could not be brought up we skip BLE so the
     // device still boots (OLED + WiFi config-mode/OTA work) instead of looping.
@@ -1658,6 +1666,14 @@ void loop() {
       WiFi.mode(WIFI_OFF);
       g_configMode = false;
     }
+  }
+
+  // Config mode just ended (encoder hold or timeout): bring BLE back up so the
+  // keyboard works again. Deferred begin() (setup skipped it while the AP was up).
+  if (!g_configMode && g_nvsOk && !g_bleStarted) {
+    bleKeyboard.begin();
+    g_bleStarted = true;
+    log_e("[DBG cfg] BLE restarted after config mode");
   }
 
   for(int i = 0; i < 8; i++) switches[i].update();
