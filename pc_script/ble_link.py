@@ -285,16 +285,38 @@ class BleLinkManager:
         threading.Thread(target=self._discovery_loop, daemon=True, name="ble-mgr").start()
         return True
 
-    def discover(self, timeout=SCAN_TIMEOUT):
-        """One-shot scan. Returns a list of dicts:
-        ``{"dev_id", "name", "address"}`` for every BindDeck found."""
-        if not _load_bleak():
-            return []
+    @staticmethod
+    def _run_coro(coro):
+        """Run a coroutine from synchronous code and return its result.
+
+        ``BleakScanner.discover`` is a coroutine function, so it must be
+        awaited. This call happens from the discovery thread and from Flask
+        request handling - both synchronous - so we drive it with a fresh
+        event loop. If the current thread already has a running loop (not
+        expected here), run it in a throwaway thread instead of crashing with
+        "asyncio.run() cannot be called from a running event loop"."""
         try:
-            devices = _BleakScanner.discover(timeout=timeout)
-        except Exception as e:  # noqa: BLE001
-            print("[ble] discover error:", e)
-            return []
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(coro)
+
+        result = {}
+
+        def _worker():
+            try:
+                result["value"] = asyncio.run(coro)
+            except Exception as e:  # noqa: BLE001
+                result["error"] = e
+
+        t = threading.Thread(target=_worker, daemon=True, name="ble-discover")
+        t.start()
+        t.join()
+        if "error" in result:
+            raise result["error"]
+        return result.get("value")
+
+    async def _discover_async(self, timeout):
+        devices = await _BleakScanner.discover(timeout=timeout)
         found = []
         for d in devices:
             if d.name and d.name.startswith(DEVICE_PREFIX):
@@ -304,6 +326,17 @@ class BleLinkManager:
                     "address": d.address,
                 })
         return found
+
+    def discover(self, timeout=SCAN_TIMEOUT):
+        """One-shot scan. Returns a list of dicts:
+        ``{"dev_id", "name", "address"}`` for every BindDeck found."""
+        if not _load_bleak():
+            return []
+        try:
+            return self._run_coro(self._discover_async(timeout))
+        except Exception as e:  # noqa: BLE001
+            print("[ble] discover error:", e)
+            return []
 
     def _discovery_loop(self):
         import time as _t
