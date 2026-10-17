@@ -235,6 +235,22 @@ def load_config():
         except Exception as e:
             print("Error loading config:", e)
     print(f"[DBG load_config] esp32.pins = {config.get('esp32', {}).get('pins')!r}")
+    # Log which button actions were loaded (global + per device). This makes a
+    # wiped/empty action map obvious in the console instead of silently
+    # turning every button into a no-op.
+    def _summ(keys):
+        if not isinstance(keys, dict):
+            return "(none)"
+        pairs = []
+        for k, v in keys.items():
+            if isinstance(v, dict):
+                pairs.append((str(k), f"{k}={(v.get('type') or 'none')}"))
+        pairs.sort(key=lambda kv: int(kv[0]) if kv[0].isdigit() else 999)
+        return ", ".join(p[1] for p in pairs) or "(none)"
+    print(f"[DBG load_config] keys = {_summ(config.get('keys'))}")
+    for _did, _dev in (config.get("devices") or {}).items():
+        if isinstance(_dev, dict):
+            print(f"[DBG load_config] device {_did} keys = {_summ(_dev.get('keys'))}")
 
 def manage_startup(enable):
     try:
@@ -509,6 +525,41 @@ def _device_config(dev_id):
     return keys, esp32
 
 
+def _lookup_action(dev_id, key_index):
+    """Find the configured action for a button, wherever it was saved.
+
+    Buttons come in over HID as F13-F20, which does NOT identify the deck, so
+    a strict per-device lookup can miss actions that live under another key
+    (or under the global config). We therefore try, in order: the exact device
+    entry, the global config, then any other device entry — returning the first
+    *configured* (non-"none") action. Only if none is configured do we return
+    whatever the first candidate had (usually "none" = passthrough).
+
+    This guarantees a button keeps firing even when the BLE config link is
+    down (Windows holding the single BLE link) or when the actions were saved
+    under a per-device entry rather than globally."""
+    key = str(key_index)
+    devices = config.get("devices") or {}
+    if not isinstance(devices, dict):
+        devices = {}
+    candidates = []
+    if dev_id and isinstance(devices.get(dev_id), dict):
+        candidates.append(devices[dev_id].get("keys") or {})
+    candidates.append(config.get("keys") or {})
+    for did, dev in devices.items():
+        if did != dev_id and isinstance(dev, dict):
+            candidates.append(dev.get("keys") or {})
+    for keys in candidates:
+        a = keys.get(key) if isinstance(keys, dict) else None
+        if isinstance(a, dict) and a.get("type", "none") not in ("none", ""):
+            return a
+    for keys in candidates:
+        a = keys.get(key) if isinstance(keys, dict) else None
+        if isinstance(a, dict):
+            return a
+    return {}
+
+
 def execute_macro(dev_id, key_index):
     global last_macro_times
     now = time.time()
@@ -520,8 +571,7 @@ def execute_macro(dev_id, key_index):
         toggle_audio()
         return
         
-    keys, _esp32 = _device_config(dev_id)
-    action = keys.get(str(key_index), {})
+    action = _lookup_action(dev_id, key_index)
     action_type = action.get("type", "none")
     value = action.get("value", "")
     anim = action.get("anim", -1)
@@ -630,11 +680,12 @@ def on_key_event(e):
                 threading.Thread(target=toggle_audio, daemon=True).start()
                 return False
             if 13 <= key_num <= 20: 
-                # The HID event can't say which deck sent it; prefer the last
-                # deck we heard from over BLE, else the default config.
+                # The HID event can't say which deck sent it; _lookup_action
+                # finds the configured action wherever it was saved (device
+                # entry, global, or the sole other deck), so buttons keep
+                # working even when the BLE config link is down.
                 hid_dev = active_dev_id or ""
-                hid_keys, _ = _device_config(hid_dev)
-                action_type = hid_keys.get(str(key_num), {}).get("type", "none")
+                action_type = _lookup_action(hid_dev, key_num).get("type", "none")
                 if action_type != "none":
                     threading.Thread(target=execute_macro, args=(hid_dev, key_num,), daemon=True).start()
                     return False
