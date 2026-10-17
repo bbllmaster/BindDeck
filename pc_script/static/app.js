@@ -553,23 +553,28 @@ async function scanDevices() {
         ]);
         const found = (await foundRes.json()).devices || [];
         const linked = (await statusRes.json()).devices || [];
-        const connected = new Set(linked.filter(d => d.connected).map(d => d.dev_id));
 
-        // Build the option list: discovered decks first, then any connected
-        // deck not surfaced by the scan (so a just-linked deck stays listed).
-        const seen = new Set();
-        const opts = [{ value: '', label: 'Default / All' }];
-        for (const d of found) {
-            if (d.dev_id && !seen.has(d.dev_id)) {
-                seen.add(d.dev_id);
-                opts.push({ value: d.dev_id, label: d.name || ('BindDeck-' + d.dev_id), connected: d.connected || connected.has(d.dev_id) });
-            }
+        // Merge both lists (they now come from the same live snapshot) and
+        // de-duplicate by dev_id, falling back to the address for legacy /
+        // unnamed decks.
+        const all = [];
+        const seenKeys = new Set();
+        for (const d of [...found, ...linked]) {
+            if (!d) continue;
+            const key = d.dev_id || d.address || '';
+            if (seenKeys.has(key)) continue;
+            seenKeys.add(key);
+            all.push(d);
         }
-        for (const d of linked) {
-            if (d.dev_id && !seen.has(d.dev_id)) {
-                seen.add(d.dev_id);
-                opts.push({ value: d.dev_id, label: d.name || ('BindDeck-' + d.dev_id), connected: d.connected });
-            }
+        const legacyConnected = all.some(d => !d.dev_id && d.connected);
+        const live = all.filter(d => d.connected).length;
+
+        // Option 0 is the legacy / global scope. A legacy "BindDeck" deck has
+        // no dev_id, so it is configured through this entry.
+        const opts = [{ value: '', label: 'Default / All' + (legacyConnected ? ' (connected)' : ''), connected: legacyConnected }];
+        for (const d of all) {
+            if (!d.dev_id) continue;
+            opts.push({ value: d.dev_id, label: d.name || ('BindDeck-' + d.dev_id), connected: !!d.connected });
         }
 
         sel.innerHTML = '';
@@ -582,12 +587,11 @@ async function scanDevices() {
         // Restore the active selection (value may have been set by onDeviceSelect).
         sel.value = currentDeviceId || prev || '';
 
-        const n = seen.size;
+        const n = all.filter(d => d.dev_id).length;
         if (status) {
-            const live = [...connected].length;
             status.innerHTML = n
-                ? `<span class="dot${live ? '' : ' off'}"></span>${n} deck${n > 1 ? 's' : ''} found${live ? `, ${live} connected` : ''}`
-                : 'No BindDeck found — make sure Bluetooth is on';
+                ? `<span class="dot${live ? '' : ' off'}"></span>${n} deck${n > 1 ? 's' : ''}${live ? `, ${live} connected` : ''}`
+                : 'Scanning for BindDecks… (config link offline)';
         }
     } catch (e) {
         if (status) status.innerText = 'Scan unavailable';

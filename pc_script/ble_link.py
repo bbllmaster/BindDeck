@@ -9,26 +9,31 @@ The firmware exposes a vendor service next to HID on the same BLE connection:
 Multiple BindDecks may be connected at once. Each device broadcasts a *unique*
 BLE name ``BindDeck-XXXX`` (XXXX = last two MAC bytes); the side-channel
 ``BTN:<devId>:<btn>`` message carries that suffix so the PC can tell them
-apart. This module therefore manages one connection per device through a
-``BleLinkManager``:
+apart. ``BleLinkManager`` discovers every deck, connects each one, and tags
+every incoming line with its device id:
 
     manager = BleLinkManager(on_line=handle_device_line)
-    manager.start()                 # begins discovery + connects every deck
+    manager.start()                 # discovery + connections on one event loop
     manager.send(dev_id, "CFG:..")  # route a command to one device
     manager.send_all("CMD:..")      # broadcast to every connected deck
 
-The per-device ``BleLink`` keeps its own asyncio loop on a daemon thread,
-stays connected (auto-reconnect + backoff), writes command lines to its RX and
-hands every TX notification to the manager's callback *tagged with the device
-id* (``on_line(dev_id, line)``) so the app never loses the source. The lines
-are identical to what the USB serial and WiFi-UDP paths produce, so the app's
-parser is shared.
+IMPORTANT: all BLE work (scan + every connection) runs on a *single* asyncio
+loop on one daemon thread. An earlier design used one loop per device, which
+is unreliable with bleak's Windows WinRT backend (COM apartment per thread)
+and regressed discovery/connection. This single-loop model is the same shape
+the original single-device link used, now generalised to N decks.
+
+The firmware stops advertising while a central is connected on classic ESP32
+(the C3 re-advertises). Discovery alone therefore cannot find an already
+connected deck: we cache each deck's address (persisted to a JSON file) and
+try the cached address directly, exactly like the original link did.
 
 The characteristics are encrypted-only, so an unbonded client gets a security
 error; we pair on demand and retry once.
 """
 
 import asyncio
+import json
 import threading
 import traceback
 
@@ -41,8 +46,6 @@ TX = "b1d3c0de-0003-4a5b-9c6d-1a2b3c4d5e6f"
 DEVICE_PREFIX = "BindDeck"
 SCAN_TIMEOUT = 8.0
 RECONNECT_DELAY = 3.0
-# How often the manager re-scans for decks that have just been powered on /
-# come into range, so newly added devices get connected without a restart.
 DISCOVER_INTERVAL = 5.0
 
 # bleak is imported lazily (see _load_bleak) rather than at module import time:
@@ -99,11 +102,11 @@ def dev_id_from_name(name):
 
 
 class BleLink:
-    """One BLE connection to one physical BindDeck.
+    """Connection state + outbound queue for *one* physical BindDeck.
 
-    Constructed by ``BleLinkManager`` with the device's address, id and name;
-    owns a daemon thread running an asyncio loop that connects, subscribes to
-    TX and drains an outbound command queue, reconnecting forever.
+    It owns no thread: the manager's single event loop drives its connect /
+    notify / write coroutine (`_device_session`). ``send`` is safe to call
+    from any thread.
     """
 
     def __init__(self, address, dev_id, name, manager):
@@ -116,7 +119,6 @@ class BleLink:
         self._connected = False
         self._lock = threading.Lock()
 
-    # ---- thread-safe public API -------------------------------------------
     @property
     def available(self) -> bool:
         return _BleakClient is not None
@@ -131,16 +133,6 @@ class BleLink:
         with self._lock:
             return self._address
 
-    def start(self) -> bool:
-        """Start the per-device link thread. Returns False when bleak missing."""
-        if not _load_bleak():
-            return False
-        threading.Thread(
-            target=self._thread_main, daemon=True,
-            name=f"ble-{self.dev_id or 'deck'}",
-        ).start()
-        return True
-
     def send(self, cmd: str) -> bool:
         """Queue one CFG:/CMD: line to *this* device. False when not connected."""
         with self._lock:
@@ -153,110 +145,26 @@ class BleLink:
         except Exception:
             return False
 
-    # ---- internals --------------------------------------------------------
-    def _thread_main(self):
-        try:
-            asyncio.run(self._runner())
-        except Exception as e:  # noqa: BLE001
-            print(f"[ble {self.dev_id or 'deck'}] fatal:", type(e).__name__, e)
-
-    async def _runner(self):
-        self._loop = asyncio.get_running_loop()
-        self._queue = asyncio.Queue()
-        while True:
-            try:
-                await self._session()
-            except Exception as e:  # noqa: BLE001
-                print(f"[ble {self.dev_id or 'deck'}] session error:", type(e).__name__, e)
-            with self._lock:
-                self._connected = False
-            await asyncio.sleep(RECONNECT_DELAY)
-
-    async def _connect(self):
-        # This link is bound to a specific address discovered by the manager,
-        # so just connect to it (a fresh scan is the manager's job).
-        client = _BleakClient(self._address, timeout=20.0)
-        try:
-            await client.connect()
-        except Exception as e:  # noqa: BLE001
-            print(f"[ble {self.dev_id or 'deck'}] connect failed: {e}")
-            try:
-                await client.disconnect()
-            except Exception:
-                pass
-            return None
-        return client if client.is_connected else None
-
-    async def _subscribe(self, client):
-        def _tx(_c, data: bytearray):
-            dev_id = self.dev_id
-            for one in data.decode("utf-8", errors="ignore").splitlines():
-                one = one.strip()
-                if one:
-                    self._manager._route(dev_id, one)
-
-        try:
-            await client.start_notify(TX, _tx)
-        except _BleakGATTProtocolError as e:
-            if not _is_security_error(e):
-                raise
-            print(f"[ble {self.dev_id or 'deck'}] notify needs security - pairing ...")
-            await client.pair()
-            await client.start_notify(TX, _tx)
-        return _tx
-
-    async def _write(self, client, cmd: str):
-        try:
-            await client.write_gatt_char(RX, cmd.encode(), response=True)
-        except _BleakGATTProtocolError as e:
-            if not _is_security_error(e):
-                raise
-            print(f"[ble {self.dev_id or 'deck'}] write needs security - pairing ...")
-            await client.pair()
-            await client.write_gatt_char(RX, cmd.encode(), response=True)
-
-    async def _session(self):
-        client = await self._connect()
-        if client is None:
-            return
-        print(f"[ble {self.dev_id or 'deck'}] connected {client.address} mtu={client.mtu_size}")
-        try:
-            await self._subscribe(client)
-            with self._lock:
-                self._connected = True
-            while client.is_connected:
-                try:
-                    cmd = await asyncio.wait_for(self._queue.get(), timeout=1.0)
-                except asyncio.TimeoutError:
-                    continue
-                try:
-                    await self._write(client, cmd)
-                except Exception as e:  # noqa: BLE001
-                    print(f"[ble {self.dev_id or 'deck'}] write error:", e)
-        finally:
-            with self._lock:
-                self._connected = False
-            try:
-                await client.disconnect()
-            except Exception:
-                pass
-            print(f"[ble {self.dev_id or 'deck'}] disconnected")
-
 
 class BleLinkManager:
-    """Owns discovery and one ``BleLink`` per connected BindDeck.
+    """Owns discovery and one ``BleLink`` per BindDeck, on one event loop.
 
     ``on_line(dev_id, line)`` is called for every decoded TX line, tagged with
     the source device's id so the app routes button presses and config
     correctly across multiple decks.
     """
 
-    def __init__(self, on_line=None):
+    def __init__(self, on_line=None, cache_path=None):
         self._on_line = on_line
-        self._links = {}            # address   -> BleLink
-        self._links_by_dev = {}     # dev_id    -> BleLink
+        self._cache_path = cache_path
+        self._links = {}            # address -> BleLink
+        self._links_by_dev = {}     # dev_id  -> BleLink
+        self._known = {}            # address -> {"dev_id","name"} (cache + scan)
         self._lock = threading.RLock()
+        self._loop = None
+        self._scan_lock = None
         self._running = False
+        self._load_cache()
 
     # ---- properties used by the app --------------------------------------
     @property
@@ -276,92 +184,191 @@ class BleLinkManager:
         with self._lock:
             return any(l.connected for l in self._links.values())
 
+    # ---- address cache ----------------------------------------------------
+    def _load_cache(self):
+        if not self._cache_path:
+            return
+        try:
+            with open(self._cache_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for item in data:
+                addr = item.get("address")
+                if addr:
+                    self._known[addr] = {
+                        "dev_id": item.get("dev_id", ""),
+                        "name": item.get("name", ""),
+                    }
+        except FileNotFoundError:
+            pass
+        except Exception as e:  # noqa: BLE001
+            print("[ble] cache load failed:", e)
+
+    def _save_cache(self):
+        if not self._cache_path:
+            return
+        try:
+            with self._lock:
+                items = [{"address": a, "dev_id": v.get("dev_id", ""), "name": v.get("name", "")}
+                         for a, v in self._known.items()]
+            with open(self._cache_path, "w", encoding="utf-8") as f:
+                json.dump(items, f, indent=2)
+        except Exception as e:  # noqa: BLE001
+            print("[ble] cache save failed:", e)
+
     # ---- lifecycle --------------------------------------------------------
     def start(self) -> bool:
-        """Load bleak and start the discovery thread. False when bleak missing."""
+        """Load bleak and start the manager thread. False when bleak missing."""
         if not _load_bleak():
             return False
         self._running = True
-        threading.Thread(target=self._discovery_loop, daemon=True, name="ble-mgr").start()
+        threading.Thread(target=self._thread_main, daemon=True, name="ble-mgr").start()
         return True
 
-    @staticmethod
-    def _run_coro(coro):
-        """Run a coroutine from synchronous code and return its result.
-
-        ``BleakScanner.discover`` is a coroutine function, so it must be
-        awaited. This call happens from the discovery thread and from Flask
-        request handling - both synchronous - so we drive it with a fresh
-        event loop. If the current thread already has a running loop (not
-        expected here), run it in a throwaway thread instead of crashing with
-        "asyncio.run() cannot be called from a running event loop"."""
+    def _thread_main(self):
         try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return asyncio.run(coro)
-
-        result = {}
-
-        def _worker():
-            try:
-                result["value"] = asyncio.run(coro)
-            except Exception as e:  # noqa: BLE001
-                result["error"] = e
-
-        t = threading.Thread(target=_worker, daemon=True, name="ble-discover")
-        t.start()
-        t.join()
-        if "error" in result:
-            raise result["error"]
-        return result.get("value")
-
-    async def _discover_async(self, timeout):
-        devices = await _BleakScanner.discover(timeout=timeout)
-        found = []
-        for d in devices:
-            if d.name and d.name.startswith(DEVICE_PREFIX):
-                found.append({
-                    "dev_id": dev_id_from_name(d.name),
-                    "name": d.name,
-                    "address": d.address,
-                })
-        return found
-
-    def discover(self, timeout=SCAN_TIMEOUT):
-        """One-shot scan. Returns a list of dicts:
-        ``{"dev_id", "name", "address"}`` for every BindDeck found."""
-        if not _load_bleak():
-            return []
-        try:
-            return self._run_coro(self._discover_async(timeout))
+            asyncio.run(self._runner())
         except Exception as e:  # noqa: BLE001
-            print("[ble] discover error:", e)
-            return []
+            print("[ble] fatal:", type(e).__name__, e)
 
-    def _discovery_loop(self):
-        import time as _t
+    async def _runner(self):
+        self._loop = asyncio.get_running_loop()
+        self._scan_lock = asyncio.Lock()
+
+        # First try every cached address directly - the deck may already be
+        # connected to the OS via HID and therefore not advertising.
+        for addr, info in list(self._known.items()):
+            self._ensure_link(addr, info.get("dev_id", ""), info.get("name", ""))
+
         while self._running:
             try:
-                for d in self.discover():
-                    self._ensure_link(d["address"], d["dev_id"], d["name"])
+                await self._discover_and_connect()
             except Exception as e:  # noqa: BLE001
-                print("[ble] discovery loop error:", e)
-            # Sleep in small slices so a stop is honoured quickly.
-            for _ in range(int(DISCOVER_INTERVAL)):
-                if not self._running:
-                    return
-                _t.sleep(1.0)
+                print("[ble] discovery loop error:", type(e).__name__, e)
+            await asyncio.sleep(DISCOVER_INTERVAL)
+
+    # ---- discovery --------------------------------------------------------
+    async def _scan(self, timeout):
+        """Scan once (serialised). Returns [{dev_id,name,address}]."""
+        if self._scan_lock is None:
+            self._scan_lock = asyncio.Lock()
+        async with self._scan_lock:
+            try:
+                devices = await _BleakScanner.discover(timeout=timeout, return_adv=True)
+            except TypeError:
+                # Older bleak without return_adv.
+                devices = await _BleakScanner.discover(timeout=timeout)
+
+        # return_adv=True yields {address: (BLEDevice, AdvertisementData)}.
+        if isinstance(devices, dict):
+            items = list(devices.values())
+        else:
+            items = [(d, None) for d in devices]
+
+        found = []
+        for item in items:
+            d, adv = item if isinstance(item, tuple) else (item, None)
+            name = getattr(d, "name", None) or (getattr(adv, "local_name", None) if adv else None)
+            services = list(getattr(adv, "service_uuids", None) or []) if adv else []
+            if not (bool(name and name.startswith(DEVICE_PREFIX)) or (SVC in services)):
+                continue
+            dev_id = dev_id_from_name(name) if name else ""
+            found.append({
+                "dev_id": dev_id,
+                "name": name or (f"BindDeck-{dev_id}" if dev_id else "BindDeck"),
+                "address": d.address,
+            })
+        return found
+
+    async def _discover_and_connect(self):
+        found = await self._scan(SCAN_TIMEOUT)
+        for d in found:
+            self._remember(d["address"], d["dev_id"], d["name"])
+            self._ensure_link(d["address"], d["dev_id"], d["name"])
+
+    def _remember(self, address, dev_id, name):
+        with self._lock:
+            prev = self._known.get(address, {})
+            if prev.get("dev_id") == dev_id and prev.get("name") == name:
+                return
+            self._known[address] = {"dev_id": dev_id, "name": name}
+        self._save_cache()
 
     def _ensure_link(self, address, dev_id, name):
+        """Create a BleLink + its session coroutine if not already tracked.
+        Called from the manager loop (or before it starts for cached ones)."""
         with self._lock:
             if address in self._links:
                 return
             link = BleLink(address, dev_id, name, self)
+            link._loop = self._loop
             self._links[address] = link
-            # A dev_id may collide if two decks somehow share a suffix; the
-            # last-seen address wins for routing, which is fine in practice.
             self._links_by_dev[dev_id] = link
-        link.start()
+        print(f"[ble] deck {name or dev_id or address} ({address}) id={dev_id or '-'} -> connecting")
+        asyncio.ensure_future(self._device_session(link))
+
+    # ---- one device session ----------------------------------------------
+    async def _device_session(self, link):
+        tag = link.dev_id or "deck"
+        while self._running:
+            client = None
+            try:
+                client = _BleakClient(link.address, timeout=20.0)
+                await client.connect()
+                if not client.is_connected:
+                    raise RuntimeError("connect returned without a live link")
+                await self._subscribe(link, client)
+                link._queue = asyncio.Queue()
+                with link._lock:
+                    link._connected = True
+                print(f"[ble {tag}] connected {client.address} mtu={getattr(client, 'mtu_size', '?')}")
+                while client.is_connected:
+                    try:
+                        cmd = await asyncio.wait_for(link._queue.get(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        continue
+                    try:
+                        await self._write(link, client, cmd)
+                    except Exception as e:  # noqa: BLE001
+                        print(f"[ble {tag}] write error:", e)
+            except Exception as e:  # noqa: BLE001
+                print(f"[ble {tag}] session error:", type(e).__name__, e)
+            finally:
+                with link._lock:
+                    link._connected = False
+                if client is not None:
+                    try:
+                        await client.disconnect()
+                    except Exception:
+                        pass
+                print(f"[ble {tag}] disconnected")
+            await asyncio.sleep(RECONNECT_DELAY)
+
+    async def _subscribe(self, link, client):
+        def _tx(_c, data: bytearray):
+            for one in data.decode("utf-8", errors="ignore").splitlines():
+                one = one.strip()
+                if one:
+                    self._route(link.dev_id, one)
+
+        try:
+            await client.start_notify(TX, _tx)
+        except _BleakGATTProtocolError as e:
+            if not _is_security_error(e):
+                raise
+            print(f"[ble {link.dev_id or 'deck'}] notify needs security - pairing ...")
+            await client.pair()
+            await client.start_notify(TX, _tx)
+        return _tx
+
+    async def _write(self, link, client, cmd: str):
+        try:
+            await client.write_gatt_char(RX, cmd.encode(), response=True)
+        except _BleakGATTProtocolError as e:
+            if not _is_security_error(e):
+                raise
+            print(f"[ble {link.dev_id or 'deck'}] write needs security - pairing ...")
+            await client.pair()
+            await client.write_gatt_char(RX, cmd.encode(), response=True)
 
     # ---- inbound routing --------------------------------------------------
     def _route(self, dev_id, line):
@@ -392,14 +399,60 @@ class BleLinkManager:
 
     # ---- status -----------------------------------------------------------
     def devices(self):
-        """Snapshot of every known deck for the UI / status endpoints."""
+        """Snapshot of every known deck for the UI / status endpoints.
+
+        Includes decks seen only in a scan or from a cached address that we
+        haven't connected to yet (connected=False), so the picker can list
+        them and show why they aren't usable."""
         with self._lock:
-            return [
-                {
-                    "dev_id": l.dev_id,
-                    "name": l.name,
-                    "address": l.address,
-                    "connected": l.connected,
-                }
-                for l in self._links.values()
-            ]
+            links = list(self._links.values())
+            known = dict(self._known)
+        by_key = {}
+        order = []
+        for l in links:
+            key = l.dev_id or l.address
+            cur = by_key.get(key)
+            if cur is None or (l.connected and not cur.connected):
+                if cur is None:
+                    order.append(key)
+                by_key[key] = l
+        # Include cached/known decks that have no link yet.
+        for addr, info in known.items():
+            key = info.get("dev_id") or addr
+            if key in by_key or addr in self._links:
+                continue
+            order.append(key)
+            by_key[key] = {
+                "dev_id": info.get("dev_id", ""),
+                "name": info.get("name", ""),
+                "address": addr,
+                "connected": False,
+            }
+        out = []
+        for key in order:
+            v = by_key[key]
+            if isinstance(v, BleLink):
+                out.append({"dev_id": v.dev_id, "name": v.name, "address": v.address, "connected": v.connected})
+            else:
+                out.append(v)
+        return out
+
+    def discover(self, timeout=SCAN_TIMEOUT):
+        """One-shot scan for synchronous callers. Runs on the manager loop when
+        it is up so it never spins a competing asyncio loop (WinRT dislikes
+        that); falls back to a throwaway loop before start()."""
+        if not _load_bleak():
+            return []
+        loop = self._loop
+        if loop is not None and loop.is_running():
+            try:
+                fut = asyncio.run_coroutine_threadsafe(self._scan(timeout), loop)
+                return fut.result(timeout=timeout + 15)
+            except Exception as e:  # noqa: BLE001
+                print("[ble] discover error:", e)
+                return []
+        try:
+            return asyncio.run(self._scan(timeout))
+        except Exception as e:  # noqa: BLE001
+            print("[ble] discover error:", e)
+            return []

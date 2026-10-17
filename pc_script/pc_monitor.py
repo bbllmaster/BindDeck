@@ -390,6 +390,11 @@ def _kbd_send(seq):
 # Last firmware identity reported by the device (CMD:VERSION / CMD:GET_TZ).
 fw_info = {"version": "", "display": "", "chip": "", "build": "", "tz": ""}
 
+# Last device id that sent a side-channel line. The local HID hook (which only
+# sees F13-F20 and cannot know which deck produced them) uses this to pick the
+# right per-device action map once BLE has told us which deck is active.
+active_dev_id = ""
+
 
 def handle_device_line(dev_id, line):
     """Handle one line coming back from the device.
@@ -405,6 +410,7 @@ def handle_device_line(dev_id, line):
     message carries no devId we fall back to the transport's ``dev_id`` so an
     old deck still works. The new format is authoritative when present.
     """
+    global active_dev_id
     if line.startswith("BTN:"):
         try:
             parts = line.split(":")
@@ -418,6 +424,8 @@ def handle_device_line(dev_id, line):
                 # Legacy format: BTN:<btn> -> use the transport's device id.
                 btn = int(parts[1])
                 route_dev = dev_id
+            if route_dev:
+                active_dev_id = route_dev
             threading.Thread(target=execute_macro, args=(route_dev, btn + 13), daemon=True).start()
         except Exception:
             # Swallow malformed lines (e.g. a half-received packet) instead of
@@ -465,20 +473,40 @@ def handle_device_line(dev_id, line):
     # ACK:<cmd> lines just confirm a CFG: command was applied; nothing to do.
 
 
-ble_link_obj = ble_link.BleLinkManager(on_line=handle_device_line) if ble_link else None
+ble_link_obj = ble_link.BleLinkManager(
+    on_line=handle_device_line,
+    # Persist discovered/cached addresses next to macro_config.json so a deck
+    # that is already connected to the OS (and therefore not advertising) can
+    # still be reached on the next launch.
+    cache_path=os.path.join(os.path.dirname(CONFIG_FILE), "ble_devices.json"),
+) if ble_link else None
 
 # --- KEYBOARD HOOKS ---
 last_macro_times = {}
 
 def _device_config(dev_id):
-    """Return the (keys, esp32) mapping for a device, falling back to the
-    legacy global config for any device without its own ``config["devices"]``
-    entry (including an un-upgraded single deck with dev_id ``""``)."""
-    devices = config.get("devices", {})
-    if dev_id and dev_id in devices:
-        dev = devices[dev_id]
-        return dev.get("keys", config["keys"]), dev.get("esp32", config["esp32"])
-    return config["keys"], config["esp32"]
+    """Return the (keys, esp32) mapping for a device.
+
+    Per-device settings are merged *on top of* the global defaults rather than
+    replacing them, so a partially-saved device entry can never blank out the
+    remaining button actions. For the default device (``""``) with a single
+    configured deck, that deck's entry is used as the default too — this keeps
+    the local HID hook working when the BLE side-channel is unavailable.
+    """
+    keys = dict(config.get("keys") or {})
+    esp32 = dict(config.get("esp32") or {})
+    devices = config.get("devices") or {}
+    if not isinstance(devices, dict):
+        devices = {}
+    dev = devices.get(dev_id) if dev_id else None
+    if not isinstance(dev, dict) and not dev_id and len(devices) == 1:
+        dev = next(iter(devices.values()))
+    if isinstance(dev, dict):
+        if isinstance(dev.get("keys"), dict):
+            keys.update(dev["keys"])
+        if isinstance(dev.get("esp32"), dict):
+            esp32.update(dev["esp32"])
+    return keys, esp32
 
 
 def execute_macro(dev_id, key_index):
@@ -497,6 +525,8 @@ def execute_macro(dev_id, key_index):
     action_type = action.get("type", "none")
     value = action.get("value", "")
     anim = action.get("anim", -1)
+    # One line per press: proves the BTN arrived and which action matched.
+    print(f"[btn] dev={dev_id or '-'} key={key_index} type={action_type} value={value!r}")
     
     try:
         if int(anim) != -1 and window_ref:
@@ -600,10 +630,13 @@ def on_key_event(e):
                 threading.Thread(target=toggle_audio, daemon=True).start()
                 return False
             if 13 <= key_num <= 20: 
-                default_keys, _ = _device_config("")
-                action_type = default_keys.get(str(key_num), {}).get("type", "none")
+                # The HID event can't say which deck sent it; prefer the last
+                # deck we heard from over BLE, else the default config.
+                hid_dev = active_dev_id or ""
+                hid_keys, _ = _device_config(hid_dev)
+                action_type = hid_keys.get(str(key_num), {}).get("type", "none")
                 if action_type != "none":
-                    threading.Thread(target=execute_macro, args=("", key_num,), daemon=True).start()
+                    threading.Thread(target=execute_macro, args=(hid_dev, key_num,), daemon=True).start()
                     return False
     return True
 
@@ -811,6 +844,13 @@ def api_config():
 
         old_esp32 = config.get("esp32", {})
         old_keys = config.get("keys", {})
+        # Never let a partial POST (one that omits "keys"/"esp32") wipe the
+        # stored actions - a stray partial save used to reset every button to
+        # "none", which looked like the buttons stopped working entirely.
+        if "keys" not in new_cfg:
+            new_cfg["keys"] = old_keys
+        if "esp32" not in new_cfg:
+            new_cfg["esp32"] = old_esp32
         config = new_cfg
         save_config()
 
@@ -877,18 +917,16 @@ def api_ble_status():
 
 @app.route("/api/ble_devices", methods=["GET"])
 def api_ble_devices():
-    """Scan for BindDecks in range right now (used by the device picker).
+    """List every BindDeck the manager currently knows about (device picker).
 
-    Returns every deck found by a one-shot BLE scan, with an extra
-    ``connected`` flag from the manager so the UI can show already-linked
-    decks distinctly from newly discovered ones."""
+    The manager scans in the background, so this is a cheap snapshot of
+    discovered, cached and connected decks, each with a ``connected`` flag.
+    It deliberately does *not* start a blocking scan here: calling
+    ``BleakScanner`` from the Flask thread raced the background scan and could
+    return an empty list even while a deck was connected."""
     if ble_link_obj is None or not ble_link_obj.available:
         return jsonify({"available": False, "devices": []})
-    found = ble_link_obj.discover()
-    linked = {d["dev_id"]: d["connected"] for d in ble_link_obj.devices()}
-    for d in found:
-        d["connected"] = linked.get(d["dev_id"], False)
-    return jsonify({"available": True, "devices": found})
+    return jsonify({"available": True, "devices": ble_link_obj.devices()})
 
 
 @app.route("/api/fw_version", methods=["GET"])
