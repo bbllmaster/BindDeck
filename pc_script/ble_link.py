@@ -164,6 +164,7 @@ class BleLinkManager:
         self._loop = None
         self._scan_lock = None
         self._running = False
+        self._last_scan_sig = None
         self._load_cache()
 
     # ---- properties used by the app --------------------------------------
@@ -239,48 +240,116 @@ class BleLinkManager:
         for addr, info in list(self._known.items()):
             self._ensure_link(addr, info.get("dev_id", ""), info.get("name", ""))
 
+        print("[ble] scanning for BindDeck* ...")
+        first = True
         while self._running:
             try:
-                await self._discover_and_connect()
+                await self._discover_and_connect(quick=first)
             except Exception as e:  # noqa: BLE001
                 print("[ble] discovery loop error:", type(e).__name__, e)
+            first = False
             await asyncio.sleep(DISCOVER_INTERVAL)
 
     # ---- discovery --------------------------------------------------------
     async def _scan(self, timeout):
-        """Scan once (serialised). Returns [{dev_id,name,address}]."""
+        """Scan once (serialised). Returns [{dev_id,name,address}].
+
+        Plain ``discover()`` is tried first: it is the longest-standing and
+        most reliable path (and what the original single-device link used).
+        Only if it returns nothing do we retry with ``return_adv=True`` so the
+        advertised service UUID can identify a deck whose name wasn't
+        resolved."""
         if self._scan_lock is None:
             self._scan_lock = asyncio.Lock()
         async with self._scan_lock:
             try:
-                devices = await _BleakScanner.discover(timeout=timeout, return_adv=True)
-            except TypeError:
-                # Older bleak without return_adv.
-                devices = await _BleakScanner.discover(timeout=timeout)
+                raw = await _BleakScanner.discover(timeout=timeout)
+            except Exception as e:  # noqa: BLE001
+                print("[ble] scan error:", type(e).__name__, e)
+                raw = []
 
-        # return_adv=True yields {address: (BLEDevice, AdvertisementData)}.
-        if isinstance(devices, dict):
-            items = list(devices.values())
-        else:
-            items = [(d, None) for d in devices]
+        items = self._normalise(raw)
+        if not items:
+            # Second attempt with advertisement data (service-UUID matching).
+            async with self._scan_lock:
+                try:
+                    raw2 = await _BleakScanner.discover(timeout=timeout, return_adv=True)
+                except Exception:  # noqa: BLE001
+                    raw2 = None
+            items = self._normalise(raw2)
+
+        with self._lock:
+            known = dict(self._known)
 
         found = []
-        for item in items:
-            d, adv = item if isinstance(item, tuple) else (item, None)
+        seen = set()
+        for d, adv in items:
+            addr = getattr(d, "address", None)
+            if not addr or addr in seen:
+                continue
+            seen.add(addr)
             name = getattr(d, "name", None) or (getattr(adv, "local_name", None) if adv else None)
             services = list(getattr(adv, "service_uuids", None) or []) if adv else []
-            if not (bool(name and name.startswith(DEVICE_PREFIX)) or (SVC in services)):
-                continue
-            dev_id = dev_id_from_name(name) if name else ""
-            found.append({
-                "dev_id": dev_id,
-                "name": name or (f"BindDeck-{dev_id}" if dev_id else "BindDeck"),
-                "address": d.address,
-            })
+            cached = known.get(addr)
+            if name and name.startswith(DEVICE_PREFIX):
+                found.append({"dev_id": dev_id_from_name(name), "name": name, "address": addr})
+            elif SVC in services:
+                dev_id = dev_id_from_name(name) if name else (cached or {}).get("dev_id", "")
+                found.append({"dev_id": dev_id,
+                              "name": name or (cached or {}).get("name", "") or "BindDeck",
+                              "address": addr})
+            elif cached:
+                # We connected to this address before; Windows sometimes fails
+                # to resolve the name of an already-connected deck. Trust the
+                # cache so the deck stays reachable.
+                found.append({"dev_id": cached.get("dev_id", ""),
+                              "name": cached.get("name", "") or "BindDeck",
+                              "address": addr})
+
+        self._log_scan(items, found)
         return found
 
-    async def _discover_and_connect(self):
-        found = await self._scan(SCAN_TIMEOUT)
+    @staticmethod
+    def _normalise(raw):
+        """Normalise ``discover()`` output to a list of (BLEDevice, adv)."""
+        if not raw:
+            return []
+        if isinstance(raw, dict):
+            values = list(raw.values())
+        else:
+            values = list(raw)
+        items = []
+        for v in values:
+            if isinstance(v, tuple) and len(v) == 2:
+                items.append((v[0], v[1]))
+            else:
+                items.append((v, None))
+        return items
+
+    def _log_scan(self, items, found):
+        """Throttled scan diagnostics, so the console shows whether BLE is
+        seeing anything at all and why a deck was/wasn't matched."""
+        raw = []
+        for d, adv in items:
+            name = getattr(d, "name", None) or (getattr(adv, "local_name", None) if adv else None) or "?"
+            raw.append(f"{name}@{getattr(d, 'address', '?')}")
+        sig = tuple(sorted(raw))
+        if sig == self._last_scan_sig:
+            return  # nothing changed since the last scan; stay quiet
+        self._last_scan_sig = sig
+        if found:
+            print("[ble] scan found:", ", ".join(f"{r['name']}@{r['address']}" for r in found))
+        elif raw:
+            print(f"[ble] scan: {len(raw)} BLE device(s) seen, none is a BindDeck: "
+                  + ", ".join(raw[:8]))
+        else:
+            print("[ble] scan: no BLE devices seen "
+                  "(adapter off / not permitted / deck not advertising)")
+
+    async def _discover_and_connect(self, quick=False):
+        # A shorter first scan gives the user fast feedback at startup.
+        timeout = min(SCAN_TIMEOUT, 4.0) if quick else SCAN_TIMEOUT
+        found = await self._scan(timeout)
         for d in found:
             self._remember(d["address"], d["dev_id"], d["name"])
             self._ensure_link(d["address"], d["dev_id"], d["name"])
