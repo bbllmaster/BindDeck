@@ -40,6 +40,13 @@ public:
 
   void   begin();
   bool   isConnected();
+
+  // Set the BLE device name (used for advertising + NimBLEDevice::init). Must be
+  // called before begin(); the name is copied into an internal buffer so callers
+  // may pass temporaries or string literals. This lets each device expose a
+  // unique, MAC-derived name (e.g. "BindDeck-A1B2") at runtime.
+  void   setName(const char* name);
+
   // Called from the main loop: if we are connected but no longer advertising,
   // restart advertising so the device stays discoverable for the config app.
   void   keepAdvertising();
@@ -55,7 +62,8 @@ public:
 private:
   void sendKeyboard();
 
-  const char* _name;
+  char        _nameBuf[32];   // storage for the (runtime-settable) device name
+  const char* _name = _nameBuf;
   const char* _man;
   uint8_t     _battery;
 

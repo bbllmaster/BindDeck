@@ -15,6 +15,7 @@
 #include <esp_timer.h>
 #include <nvs_flash.h>     // robust NVS bring-up (see ensureNvs)
 #include <esp_partition.h>  // dump active partition table on NVS failure (ground truth)
+#include <esp_efuse.h>      // esp_efuse_mac_get_default: read base MAC w/o WiFi init
 
 // === ESP32-C3: free the encoder pins from UART0 ===
 // On ESP32-C3 the default UART0 pins are GPIO20/21, which this firmware uses
@@ -137,6 +138,13 @@ static String g_cfgApName;   // the "BindDeck-XXXX" AP name, shown on OLED
 static String g_cfgApIp;     // the AP IP (192.168.4.1), shown on OLED
 static int g_otaProgress = -1;  // -1 = not uploading; 0..100 = percent
 static bool g_bleStarted = false;  // true once bleKeyboard.begin() has run
+
+// --- Multi-device identity -------------------------------------------------
+// Each device derives a unique, MAC-based short id (e.g. "A1B2") and a matching
+// BLE device name "BindDeck-A1B2". g_devId is appended to every BTN: message so
+// the host can tell which physical device a press came from (see applyDeviceIdentity).
+static String g_devId;    // e.g. "A1B2"
+static String g_bleName;  // e.g. "BindDeck-A1B2"
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -1614,6 +1622,26 @@ static void ensureNvs() {
   }
 }
 
+// Compute the per-device identity from the base MAC (available even when WiFi
+// is OFF, so it works in both normal and config mode) and push the unique BLE
+// name. Must run before every bleKeyboard.begin(); the name is stored in the
+// BleKeyboard's internal buffer.
+void applyDeviceIdentity() {
+  uint8_t mac[6];
+  // esp_efuse_mac_get_default reads the EFUSE base MAC directly, without needing
+  // esp_wifi_init(). The base MAC equals the WiFi STA MAC by default, so this
+  // matches the "BindDeck-XXXX" AP name produced in setupProvisioning().
+  if (esp_efuse_mac_get_default(mac) != ESP_OK) {
+    memset(mac, 0, sizeof(mac));
+  }
+  char suffix[5];
+  snprintf(suffix, sizeof(suffix), "%02X%02X", mac[4], mac[5]);
+  g_devId = suffix;
+  g_bleName = "BindDeck-" + g_devId;
+  bleKeyboard.setName(g_bleName.c_str());
+  log_e("[id] device identity: name=%s devId=%s", g_bleName.c_str(), g_devId.c_str());
+}
+
 void setup() {
   Serial.begin(115200);
   Serial.setTimeout(10);
@@ -1663,6 +1691,9 @@ void setup() {
   // corrupt/incompatible NVS left by an older build must be healed here or the
   // later NimBLE init aborts and the device reboots forever.
   ensureNvs();
+
+  // Compute the unique per-device BLE name + devId before any BLE begin().
+  applyDeviceIdentity();
 
   loadConfig();  // populates switchPins[] from Preferences (or defaults)
   log_e("[DBG setup] loadConfig ok"); delay(30);
@@ -1716,6 +1747,7 @@ void setup() {
   };
   log_e("[DBG setup] ble begin..."); delay(30);
   if (g_nvsOk && !g_configMode) {
+    applyDeviceIdentity();   // ensure the unique name is set before begin()
     bleKeyboard.begin();
     g_bleStarted = true;
     log_e("[DBG setup] ble ok"); delay(30);
@@ -1816,6 +1848,7 @@ void loop() {
   // Config mode just ended (encoder hold or timeout): bring BLE back up so the
   // keyboard works again. Deferred begin() (setup skipped it while the AP was up).
   if (!g_configMode && g_nvsOk && !g_bleStarted) {
+    applyDeviceIdentity();   // re-assert the unique name before the deferred begin()
     bleKeyboard.begin();
     g_bleStarted = true;
     log_e("[DBG cfg] BLE restarted after config mode");
@@ -1868,7 +1901,7 @@ void loop() {
           delay(10);
           bleKeyboard.releaseAll();
         }
-        sendDataToPC("BTN:" + String(i));
+        sendDataToPC("BTN:" + g_devId + ":" + String(i));
         lastActionKeyIndex = i;
         currentState = STATE_ACTION;
         actionStartTime = millis();
@@ -1884,7 +1917,7 @@ void loop() {
           delay(10);
           bleKeyboard.releaseAll();
         }
-        sendDataToPC("BTN:8");
+        sendDataToPC("BTN:" + g_devId + ":8");
         lastActionKeyIndex = 8;
         currentState = STATE_ACTION;
         actionStartTime = millis();

@@ -71,7 +71,18 @@ class HidServerCB : public NimBLEServerCallbacks {
 };
 
 BleKeyboard::BleKeyboard(const char* deviceName, const char* deviceManufacturer, uint8_t batteryLevel)
-  : _name(deviceName), _man(deviceManufacturer), _battery(batteryLevel) {}
+  : _man(deviceManufacturer), _battery(batteryLevel) {
+  _nameBuf[0] = '\0';
+  setName(deviceName);
+}
+
+void BleKeyboard::setName(const char* name) {
+  _nameBuf[0] = '\0';
+  if (name) {
+    strncpy(_nameBuf, name, sizeof(_nameBuf) - 1);
+    _nameBuf[sizeof(_nameBuf) - 1] = '\0';
+  }
+}
 
 void BleKeyboard::begin() {
   NimBLEDevice::init(_name);
