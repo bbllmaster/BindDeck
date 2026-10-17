@@ -20,6 +20,19 @@ fetch('/api/installed_apps')
 
 let config = {};
 let currentKey = null;
+// Active BLE device for per-device configuration. Empty string means the
+// legacy single "Default / All" deck; a value like "A1B2" scopes every config
+// save to that specific BindDeck only.
+let currentDeviceId = '';
+
+// Build the /api/config URL, attaching the active deviceId so the server
+// stores/returns that deck's own config instead of the global one.
+function cfgPostUrl(force) {
+    const q = [];
+    if (force) q.push('force=1');
+    if (currentDeviceId) q.push('deviceId=' + encodeURIComponent(currentDeviceId));
+    return '/api/config' + (q.length ? '?' + q.join('&') : '');
+}
 
 document.addEventListener('DOMContentLoaded', () => {
     populateTimezoneSelect();
@@ -415,8 +428,19 @@ function updatePresets(type) {
 
 async function fetchConfig() {
     try {
-        const res = await fetch('/api/config?t=' + new Date().getTime());
-        config = await res.json();
+        const url = '/api/config?t=' + new Date().getTime() +
+            (currentDeviceId ? '&deviceId=' + encodeURIComponent(currentDeviceId) : '');
+        const res = await fetch(url);
+        const data = await res.json();
+        if (currentDeviceId) {
+            // Scope the loaded deck's esp32/keys onto the in-memory config so
+            // the form shows that deck's mappings while app settings stay
+            // global. App settings aren't per-device.
+            config.esp32 = Object.assign({}, config.esp32, data.esp32 || {});
+            config.keys = Object.assign({}, config.keys, data.keys || {});
+        } else {
+            config = data;
+        }
         
         if (config.esp32) {
             document.getElementById('animMode').value = config.esp32.animMode || 0;
@@ -512,6 +536,76 @@ async function fetchConfig() {
         console.error("Error fetching config", e);
     }
 }
+
+// ---- Multi-device support (WS-268) ---------------------------------------
+// Populate the device selector with every BindDeck found by a BLE scan and,
+// separately, the currently connected ones, marking each with a connection
+// dot. Keeps the user's current selection; does not switch devices on its own.
+async function scanDevices() {
+    const sel = document.getElementById('deviceSelector');
+    const status = document.getElementById('device-scan-status');
+    if (!sel) return;
+    const prev = currentDeviceId || sel.value || '';
+    try {
+        const [foundRes, statusRes] = await Promise.all([
+            fetch('/api/ble_devices?t=' + new Date().getTime()),
+            fetch('/api/ble_status?t=' + new Date().getTime())
+        ]);
+        const found = (await foundRes.json()).devices || [];
+        const linked = (await statusRes.json()).devices || [];
+        const connected = new Set(linked.filter(d => d.connected).map(d => d.dev_id));
+
+        // Build the option list: discovered decks first, then any connected
+        // deck not surfaced by the scan (so a just-linked deck stays listed).
+        const seen = new Set();
+        const opts = [{ value: '', label: 'Default / All' }];
+        for (const d of found) {
+            if (d.dev_id && !seen.has(d.dev_id)) {
+                seen.add(d.dev_id);
+                opts.push({ value: d.dev_id, label: d.name || ('BindDeck-' + d.dev_id), connected: d.connected || connected.has(d.dev_id) });
+            }
+        }
+        for (const d of linked) {
+            if (d.dev_id && !seen.has(d.dev_id)) {
+                seen.add(d.dev_id);
+                opts.push({ value: d.dev_id, label: d.name || ('BindDeck-' + d.dev_id), connected: d.connected });
+            }
+        }
+
+        sel.innerHTML = '';
+        for (const o of opts) {
+            const el = document.createElement('option');
+            el.value = o.value;
+            el.textContent = o.label + (o.connected ? '  ●' : '');
+            sel.appendChild(el);
+        }
+        // Restore the active selection (value may have been set by onDeviceSelect).
+        sel.value = currentDeviceId || prev || '';
+
+        const n = seen.size;
+        if (status) {
+            const live = [...connected].length;
+            status.innerHTML = n
+                ? `<span class="dot${live ? '' : ' off'}"></span>${n} deck${n > 1 ? 's' : ''} found${live ? `, ${live} connected` : ''}`
+                : 'No BindDeck found — make sure Bluetooth is on';
+        }
+    } catch (e) {
+        if (status) status.innerText = 'Scan unavailable';
+        console.error('scanDevices:', e);
+    }
+}
+
+// Switch the config scope to the chosen deck and reload its settings.
+function onDeviceSelect() {
+    const sel = document.getElementById('deviceSelector');
+    if (!sel) return;
+    currentDeviceId = sel.value || '';
+    fetchConfig();
+}
+
+// Keep the device list fresh while the app is open.
+setInterval(() => { scanDevices(); }, 8000);
+document.addEventListener('DOMContentLoaded', () => { scanDevices(); });
 
 async function loadDeviceProfile() {
     try {
@@ -696,7 +790,7 @@ async function saveButtonPins() {
     config.esp32.pins = valid;
     try {
         // 1) persist to macro_config.json
-        await fetch('/api/config', {
+        await fetch(cfgPostUrl(false), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(config)
@@ -721,7 +815,7 @@ function resetButtonPins() {
 
 async function persistConfig() {
     try {
-        await fetch('/api/config', {
+        await fetch(cfgPostUrl(false), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(config)
@@ -786,7 +880,7 @@ async function saveSettings(silent = false, force = false) {
         // the whole config, not just the values that changed on disk - so a
         // setting that never reached the device can always be re-sent. Same
         // short-circuit that saveButtonPins works around via /api/sync_pins.
-        await fetch('/api/config' + (force ? '?force=1' : ''), {
+        await fetch(cfgPostUrl(force), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(config)

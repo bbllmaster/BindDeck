@@ -129,7 +129,12 @@ device_ip = None
 config = {
     "keys": {str(i): {"type": "none", "value": "", "anim": -1} for i in range(13, 22)},
     "esp32": {"animMode": 0, "encMode": 0, "pins": [13, 12, 14, 27, 32, 33, 25, 26], "sleepEnabled": True, "sleepTimeout": 5},
-    "app": {"theme": "dark", "lang": "en", "startup": False, "closeMode": "ask", "deviceType": "esp32", "connection_type": "usb"}
+    "app": {"theme": "dark", "lang": "en", "startup": False, "closeMode": "ask", "deviceType": "esp32", "connection_type": "usb"},
+    # Per-device overrides keyed by BLE dev_id (e.g. "A1B2"). When a device has
+    # an entry here, its keys/esp32 config is used instead of the legacy global
+    # "keys"/"esp32" above. The legacy keys remain the default for any device
+    # (including the single un-upgraded "BindDeck") without its own entry.
+    "devices": {},
 }
 
 # --- OTA UPDATER ---
@@ -311,10 +316,16 @@ def _valid_pin_set(pins, device_type=None):
         seen.add(p)
     return True
 
-def send_to_device(cmd):
-    """Send a CFG:/CMD: line to the device.
+def send_to_device(cmd, dev_id=None):
+    """Send a CFG:/CMD: line to the device(s).
 
-    Primary path is a Wi-Fi broadcast to 255.255.255.255:4210 (plus each
+    ``dev_id`` selects a single BLE-connected BindDeck (its per-device CFG only
+    changes that deck). When ``dev_id`` is None the command is broadcast: the
+    Wi-Fi path (255.255.255.255:4210 plus each subnet's directed broadcast),
+    the USB serial when open, and every connected BLE deck — so it reaches all
+    devices at once.
+
+    Primary Wi-Fi path is a broadcast to 255.255.255.255:4210 (plus each
     subnet's directed broadcast) — the device already listens on UDP 4210 and
     runs processCommand() on every received packet, so this reaches the C3
     without needing its IP (the C3 has no USB serial). A unicast to the last
@@ -352,11 +363,18 @@ def send_to_device(cmd):
             via.append("serial")
         except Exception as e:
             print("Serial send error:", e)
-    # BLE config channel: the same CFG:/CMD: lines over the existing BLE link,
-    # so the device can be configured with no WiFi at all.
-    if ble_link_obj is not None and ble_link_obj.send(cmd):
-        sent = True
-        via.append("ble")
+    # BLE config channel: the same CFG:/CMD: lines over the existing BLE link(s),
+    # so the device can be configured with no WiFi at all. A dev_id targets one
+    # deck; otherwise every connected deck receives the command.
+    if ble_link_obj is not None:
+        if dev_id:
+            if ble_link_obj.send(dev_id, cmd):
+                sent = True
+                via.append(f"ble:{dev_id}")
+        else:
+            if ble_link_obj.send_all(cmd):
+                sent = True
+                via.append("ble")
     # Log config traffic (not the high-rate C:..G:.. telemetry), so it is
     # obvious which channel a command actually left through.
     if cmd.startswith(("CFG:", "CMD:")):
@@ -373,17 +391,38 @@ def _kbd_send(seq):
 fw_info = {"version": "", "display": "", "chip": "", "build": "", "tz": ""}
 
 
-def handle_device_line(line):
+def handle_device_line(dev_id, line):
     """Handle one line coming back from the device.
 
     USB serial, WiFi UDP and BLE notifications all funnel through here, so the
-    behaviour is identical whichever transport the line arrived on.
+    behaviour is identical whichever transport the line arrived on. ``dev_id``
+    is the BLE device id the line came from (empty string ``""`` for the
+    non-BLE transports and for an un-upgraded single deck), used to route
+    button presses to the right per-device config.
+
+    ``BTN:`` parsing supports both the new multi-device format
+    ``BTN:<devId>:<btn>`` (WS-267) and the legacy ``BTN:<btn>`` — when the
+    message carries no devId we fall back to the transport's ``dev_id`` so an
+    old deck still works. The new format is authoritative when present.
     """
     if line.startswith("BTN:"):
         try:
-            idx = int(line.split(":")[1])
-            threading.Thread(target=execute_macro, args=(idx + 13,), daemon=True).start()
+            parts = line.split(":")
+            if len(parts) >= 3:
+                # New format: BTN:<devId>:<btn>  (devId may be empty for a
+                # legacy-named deck that still tags its messages).
+                msg_dev = parts[1]
+                btn = int(parts[2])
+                route_dev = msg_dev if msg_dev else dev_id
+            else:
+                # Legacy format: BTN:<btn> -> use the transport's device id.
+                btn = int(parts[1])
+                route_dev = dev_id
+            threading.Thread(target=execute_macro, args=(route_dev, btn + 13), daemon=True).start()
         except Exception:
+            # Swallow malformed lines (e.g. a half-received packet) instead of
+            # crashing the transport loop. int("A1B2") used to land here and
+            # silently dropped the whole keypress before the multi-device fix.
             pass
     elif line.startswith("ENC:"):
         cmd = line.split(":")[1] if ":" in line else ""
@@ -426,12 +465,23 @@ def handle_device_line(line):
     # ACK:<cmd> lines just confirm a CFG: command was applied; nothing to do.
 
 
-ble_link_obj = ble_link.BleLink(on_line=handle_device_line) if ble_link else None
+ble_link_obj = ble_link.BleLinkManager(on_line=handle_device_line) if ble_link else None
 
 # --- KEYBOARD HOOKS ---
 last_macro_times = {}
 
-def execute_macro(key_index):
+def _device_config(dev_id):
+    """Return the (keys, esp32) mapping for a device, falling back to the
+    legacy global config for any device without its own ``config["devices"]``
+    entry (including an un-upgraded single deck with dev_id ``""``)."""
+    devices = config.get("devices", {})
+    if dev_id and dev_id in devices:
+        dev = devices[dev_id]
+        return dev.get("keys", config["keys"]), dev.get("esp32", config["esp32"])
+    return config["keys"], config["esp32"]
+
+
+def execute_macro(dev_id, key_index):
     global last_macro_times
     now = time.time()
     if now - last_macro_times.get(key_index, 0) < 0.3:
@@ -442,7 +492,8 @@ def execute_macro(key_index):
         toggle_audio()
         return
         
-    action = config["keys"].get(str(key_index), {})
+    keys, _esp32 = _device_config(dev_id)
+    action = keys.get(str(key_index), {})
     action_type = action.get("type", "none")
     value = action.get("value", "")
     anim = action.get("anim", -1)
@@ -549,9 +600,10 @@ def on_key_event(e):
                 threading.Thread(target=toggle_audio, daemon=True).start()
                 return False
             if 13 <= key_num <= 20: 
-                action_type = config["keys"].get(str(key_num), {}).get("type", "none")
+                default_keys, _ = _device_config("")
+                action_type = default_keys.get(str(key_num), {}).get("type", "none")
                 if action_type != "none":
-                    threading.Thread(target=execute_macro, args=(key_num,), daemon=True).start()
+                    threading.Thread(target=execute_macro, args=("", key_num,), daemon=True).start()
                     return False
     return True
 
@@ -649,108 +701,141 @@ def api_sync_pins():
             print("Error sending CFG:PINS:", e)
     return jsonify({"success": False})
 
+def _sync_device_cfg(new_cfg, old_cfg, dev_id=None, force=False):
+    """Push the esp32/keys CFG lines that differ between old_cfg and new_cfg.
+
+    Shared by the legacy single-device path and the per-device path. When
+    ``dev_id`` is given the commands go only to that BLE deck (so changing one
+    deck's pins/animation does not touch the others); when it is None they are
+    broadcast to every deck (plus Wi-Fi/USB as usual)."""
+    new_esp32 = new_cfg.get("esp32", {}) or {}
+    new_keys = new_cfg.get("keys", {}) or {}
+    old_esp32 = old_cfg.get("esp32", {}) or {}
+    old_keys = old_cfg.get("keys", {}) or {}
+
+    if force:
+        print("[cfg] forced full sync")
+
+    anim = new_esp32.get("animMode", 0)
+    if anim is None: anim = 0
+    if force or str(old_esp32.get("animMode", "")) != str(anim):
+        send_to_device(f"CFG:ANIM:{anim}", dev_id)
+        time.sleep(0.1)
+
+    enc = new_esp32.get("encMode", 0)
+    if enc is None: enc = 0
+    if force or str(old_esp32.get("encMode", "")) != str(enc):
+        send_to_device(f"CFG:ENC:{enc}", dev_id)
+        time.sleep(0.1)
+
+    brt = new_esp32.get("brightness", 255)
+    if brt is None: brt = 255
+    if force or str(old_esp32.get("brightness", "")) != str(brt):
+        send_to_device(f"CFG:BRIGHT:{brt}", dev_id)
+        time.sleep(0.1)
+
+    # Sleep mode: CFG:SLEEP:<enabled>,<timeout_minutes>
+    sleep_enabled = new_esp32.get("sleepEnabled", True)
+    sleep_timeout = new_esp32.get("sleepTimeout", 5)
+    if force or str(old_esp32.get("sleepEnabled", "")) != str(sleep_enabled) or \
+       str(old_esp32.get("sleepTimeout", "")) != str(sleep_timeout):
+        send_to_device(f"CFG:SLEEP:{int(bool(sleep_enabled))},{int(sleep_timeout)}", dev_id)
+        print(f"[DBG CFG:SLEEP] SENT -> enabled={sleep_enabled} timeout={sleep_timeout}m dev={dev_id}")
+        time.sleep(0.1)
+
+    # Timezone for the device clock (POSIX TZ string).
+    tz = new_esp32.get("tz")
+    if tz and (force or str(old_esp32.get("tz", "")) != str(tz)):
+        send_to_device(f"CFG:TZ:{tz}", dev_id)
+        time.sleep(0.1)
+
+    # Button GPIOs — only send when the pin set actually changed
+    new_pins = new_esp32.get("pins")
+    old_pins = old_esp32.get("pins")
+    print(f"[DBG CFG:PINS] old_pins={old_pins!r} new_pins={new_pins!r} dev={dev_id}")
+    if force or (new_pins and old_pins and str(new_pins) != str(old_pins)):
+        if _valid_pin_set(new_pins):
+            pins_str = ",".join(str(int(p)) for p in new_pins)
+            send_to_device(f"CFG:PINS:{pins_str}", dev_id)
+            print(f"[DBG CFG:PINS] SENT -> CFG:PINS:{pins_str} dev={dev_id}")
+            time.sleep(0.1)
+        else:
+            print(f"[DBG CFG:PINS] REJECTED by _valid_pin_set: {new_pins!r}")
+
+    # Check if key animations changed
+    changed_anims = False
+    kb_anims = []
+    for i in range(13, 22):
+        key_anim = new_keys.get(str(i), {}).get("anim", -1)
+        old_anim = old_keys.get(str(i), {}).get("anim", -1)
+        if force or str(key_anim) != str(old_anim): changed_anims = True
+        kb_anims.append(str(key_anim))
+
+    if changed_anims:
+        kb_anims_str = ",".join(kb_anims)
+        send_to_device(f"CFG:KB_ANIM:{kb_anims_str}", dev_id)
+        time.sleep(0.1)
+
+    # Check if key texts changed
+    for i in range(13, 22):
+        disp_text = new_keys.get(str(i), {}).get("dispText", "")
+        old_text = old_keys.get(str(i), {}).get("dispText", "")
+        if force or str(disp_text) != str(old_text):
+            idx = i - 13
+            send_to_device(f"CFG:TXT:{idx}:{disp_text}", dev_id)
+            time.sleep(0.1)
+
+
 @app.route('/api/config', methods=['GET', 'POST'])
 def api_config():
     global config
     if request.method == 'POST':
-        new_cfg = request.json
+        new_cfg = request.json or {}
+        # A deviceId in the query string (preferred) or body scopes the config
+        # to one BLE deck; otherwise it is the legacy global/default config.
+        device_id = request.args.get("deviceId") or new_cfg.pop("deviceId", None)
+        if device_id:
+            old_dev = config.get("devices", {}).get(device_id, {})
+            merged = {}
+            for sub in ("esp32", "keys"):
+                base = dict(old_dev.get(sub, {})) if isinstance(old_dev.get(sub), dict) else {}
+                if sub in new_cfg and isinstance(new_cfg.get(sub), dict):
+                    base.update(new_cfg[sub])
+                merged[sub] = base
+            config.setdefault("devices", {})[device_id] = merged
+            save_config()
+            # Push only to that deck over BLE (and broadcast so a WiFi/USB copy
+            # of the same deck also gets it).
+            _sync_device_cfg(merged, old_dev, dev_id=device_id, force=True)
+            return jsonify({"status": "success", "deviceId": device_id})
+
         old_esp32 = config.get("esp32", {})
         old_keys = config.get("keys", {})
         config = new_cfg
         save_config()
-        
+
         # Send over USB serial when open, over the BLE config link when it is
         # connected, over Wi-Fi when a device IP is known, or unconditionally
         # when the connection is Wi-Fi (the device receives the broadcast on
         # UDP 4210 even before it has reported its IP back).
         if serial_port and serial_port.is_open or device_ip or \
-           (ble_link_obj is not None and ble_link_obj.connected) or \
+           (ble_link_obj is not None and ble_link_obj.any_connected) or \
            new_cfg.get("app", {}).get("connection_type") == "wifi":
             try:
-                new_esp32 = new_cfg.get("esp32", {})
-                new_keys = new_cfg.get("keys", {})
-
-                # force=1 ("Sync to Device" in the header) pushes the whole
-                # config even when nothing differs on disk - otherwise a value
-                # that was saved earlier but never reached the device stays
-                # stuck, because the old==new check skips it forever.
                 force = request.args.get("force") == "1"
-                if force:
-                    print("[cfg] forced full sync")
-                
-                anim = new_esp32.get("animMode", 0)
-                if anim is None: anim = 0
-                if force or str(old_esp32.get("animMode", "")) != str(anim):
-                    send_to_device(f"CFG:ANIM:{anim}")
-                    time.sleep(0.1)
-
-                enc = new_esp32.get("encMode", 0)
-                if enc is None: enc = 0
-                if force or str(old_esp32.get("encMode", "")) != str(enc):
-                    send_to_device(f"CFG:ENC:{enc}")
-                    time.sleep(0.1)
-
-                brt = new_esp32.get("brightness", 255)
-                if brt is None: brt = 255
-                if force or str(old_esp32.get("brightness", "")) != str(brt):
-                    send_to_device(f"CFG:BRIGHT:{brt}")
-                    time.sleep(0.1)
-
-                # Sleep mode: CFG:SLEEP:<enabled>,<timeout_minutes>
-                sleep_enabled = new_esp32.get("sleepEnabled", True)
-                sleep_timeout = new_esp32.get("sleepTimeout", 5)
-                if force or str(old_esp32.get("sleepEnabled", "")) != str(sleep_enabled) or \
-                   str(old_esp32.get("sleepTimeout", "")) != str(sleep_timeout):
-                    send_to_device(f"CFG:SLEEP:{int(bool(sleep_enabled))},{int(sleep_timeout)}")
-                    print(f"[DBG CFG:SLEEP] SENT -> enabled={sleep_enabled} timeout={sleep_timeout}m")
-                    time.sleep(0.1)
-
-                # Timezone for the device clock (POSIX TZ string).
-                tz = new_esp32.get("tz")
-                if tz and (force or str(old_esp32.get("tz", "")) != str(tz)):
-                    send_to_device(f"CFG:TZ:{tz}")
-                    time.sleep(0.1)
-
-                # Button GPIOs — only send when the pin set actually changed
-                new_pins = new_esp32.get("pins")
-                old_pins = old_esp32.get("pins")
-                print(f"[DBG CFG:PINS] old_pins={old_pins!r} new_pins={new_pins!r}")
-                if force or (new_pins and old_pins and str(new_pins) != str(old_pins)):
-                    if _valid_pin_set(new_pins):
-                        pins_str = ",".join(str(int(p)) for p in new_pins)
-                        send_to_device(f"CFG:PINS:{pins_str}")
-                        print(f"[DBG CFG:PINS] SENT -> CFG:PINS:{pins_str}")
-                        time.sleep(0.1)
-                    else:
-                        print(f"[DBG CFG:PINS] REJECTED by _valid_pin_set: {new_pins!r}")
-
-                # Check if key animations changed
-                changed_anims = False
-                kb_anims = []
-                for i in range(13, 22):
-                    key_anim = new_keys.get(str(i), {}).get("anim", -1)
-                    old_anim = old_keys.get(str(i), {}).get("anim", -1)
-                    if force or str(key_anim) != str(old_anim): changed_anims = True
-                    kb_anims.append(str(key_anim))
-                
-                if changed_anims:
-                    kb_anims_str = ",".join(kb_anims)
-                    send_to_device(f"CFG:KB_ANIM:{kb_anims_str}")
-                    time.sleep(0.1)
-                
-                # Check if key texts changed
-                for i in range(13, 22):
-                    disp_text = new_keys.get(str(i), {}).get("dispText", "")
-                    old_text = old_keys.get(str(i), {}).get("dispText", "")
-                    if force or str(disp_text) != str(old_text):
-                        idx = i - 13
-                        send_to_device(f"CFG:TXT:{idx}:{disp_text}")
-                        time.sleep(0.1)
-                
+                _sync_device_cfg(config, {"esp32": old_esp32, "keys": old_keys},
+                                 dev_id=None, force=force)
             except Exception as e:
                 print("Error enviando config al ESP32:", e)
-                
+
         return jsonify({"status": "success"})
+
+    device_id = request.args.get("deviceId")
+    if device_id:
+        dev = config.get("devices", {}).get(device_id)
+        # Return the device's own config, or fall back to the global default so
+        # the form still has something to show for an unconfigured deck.
+        return jsonify(dev if dev is not None else config)
     return jsonify(config)
 
 @app.route("/api/preview/<int:mode>", methods=["GET"])
@@ -764,7 +849,7 @@ wifi_status_data = {"connected": False, "ssid": "", "ip": ""}
 def api_get_wifi_status():
     global wifi_status_data
     if serial_port and serial_port.is_open or device_ip or \
-       (ble_link_obj is not None and ble_link_obj.connected) or \
+       (ble_link_obj is not None and ble_link_obj.any_connected) or \
        config.get("app", {}).get("connection_type") == "wifi":
         try:
             send_to_device("CMD:GET_WIFI")
@@ -777,14 +862,33 @@ def api_get_wifi_status():
 
 @app.route("/api/ble_status", methods=["GET"])
 def api_ble_status():
-    """State of the BLE config channel (used by the connection panel)."""
+    """State of the BLE config channel (used by the connection panel).
+
+    Returns the whole device list now that several BindDecks may be connected
+    at once: each entry carries its dev_id, advertised name, address and
+    connection state."""
     if ble_link_obj is None or not ble_link_obj.available:
-        return jsonify({"available": False, "connected": False, "address": None})
+        return jsonify({"available": False, "devices": []})
     return jsonify({
         "available": True,
-        "connected": ble_link_obj.connected,
-        "address": ble_link_obj.address,
+        "devices": ble_link_obj.devices(),
     })
+
+
+@app.route("/api/ble_devices", methods=["GET"])
+def api_ble_devices():
+    """Scan for BindDecks in range right now (used by the device picker).
+
+    Returns every deck found by a one-shot BLE scan, with an extra
+    ``connected`` flag from the manager so the UI can show already-linked
+    decks distinctly from newly discovered ones."""
+    if ble_link_obj is None or not ble_link_obj.available:
+        return jsonify({"available": False, "devices": []})
+    found = ble_link_obj.discover()
+    linked = {d["dev_id"]: d["connected"] for d in ble_link_obj.devices()}
+    for d in found:
+        d["connected"] = linked.get(d["dev_id"], False)
+    return jsonify({"available": True, "devices": found})
 
 
 @app.route("/api/fw_version", methods=["GET"])
@@ -931,7 +1035,7 @@ def api_status():
     # bt_connected comes from a slow PowerShell poll of the OS pairing state;
     # the BLE link's own state is fresher, so either one means "Bluetooth".
     is_bt = getattr(app, 'bt_connected', False) or \
-            (ble_link_obj is not None and ble_link_obj.connected)
+            (ble_link_obj is not None and ble_link_obj.any_connected)
     is_wifi = device_ip is not None
     
     if is_usb:
@@ -1187,7 +1291,7 @@ def serial_read_loop():
             if sp and sp.is_open and sp.in_waiting > 0:
                 line = sp.readline().decode('utf-8', errors='ignore').strip()
                 if line:
-                    handle_device_line(line)
+                    handle_device_line("", line)
         except:
             pass
         time.sleep(0.02)
@@ -1206,7 +1310,7 @@ def udp_listen_loop():
             if addr:
                 device_ip = addr[0]
             if line:
-                handle_device_line(line)
+                handle_device_line("", line)
     except Exception as e:
         print("UDP Listen Error:", e)
 
@@ -1316,9 +1420,9 @@ def hardware_loop():
         # BLE: on a wireless C3 this is the only link, so the telemetry has to
         # travel over it too - otherwise the device shows NO SIGNAL with 0/0
         # stats even though the keyboard and the config channel both work.
-        # send() is a no-op when the link is down.
+        # send_all() is a no-op when no deck is connected.
         if ble_link_obj is not None:
-            ble_link_obj.send(data_str.strip())
+            ble_link_obj.send_all(data_str.strip())
 
         time.sleep(1)
 
