@@ -51,22 +51,33 @@ static const uint8_t ASCII_MAP[128] = {
 static volatile bool s_connected = false;
 
 class HidServerCB : public NimBLEServerCallbacks {
-  void onConnect(NimBLEServer* /*s*/) override {
-    s_connected = true;
+  void onConnect(NimBLEServer* s) override {
+    // NimBLE allows several centrals (Windows HID plus the config app). Track
+    // the *count*, not a single bool: otherwise closing the config app clears
+    // the flag while HID is still up and every button press stops working
+    // (WS-271).
+    s_connected = s && s->getConnectedCount() > 0;
     // The stack stops advertising when the link comes up. Clear the library's
     // advertising state here, but do NOT restart it from this callback - doing
     // stop+start inside the connection callback races and silently fails.
     // keepAdvertising() (main loop) brings it back a moment later.
     NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
     if (adv) {
-      ESP_LOGE("BIND", "[ble] connected (wasAdvertising=%d)", (int)adv->isAdvertising());
+      ESP_LOGE("BIND", "[ble] connected n=%d (wasAdvertising=%d)",
+               (int)(s ? s->getConnectedCount() : 0), (int)adv->isAdvertising());
       adv->stop();
     }
   }
-  void onDisconnect(NimBLEServer* /*s*/) override {
-    s_connected = false;
-    NimBLEDevice::startAdvertising();
-    ESP_LOGE("BIND", "[ble] disconnected -> re-advertising");
+  void onDisconnect(NimBLEServer* s) override {
+    // NimBLE removes the peer before invoking this callback, so the count here
+    // is "centrals still attached". Only re-advertise once the last one is gone.
+    s_connected = s && s->getConnectedCount() > 0;
+    if (!s_connected) {
+      NimBLEDevice::startAdvertising();
+    }
+    ESP_LOGE("BIND", "[ble] disconnected n=%d%s",
+             (int)(s ? s->getConnectedCount() : 0),
+             s_connected ? " (still connected)" : " -> re-advertising");
   }
 };
 

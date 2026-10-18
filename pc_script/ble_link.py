@@ -23,10 +23,18 @@ is unreliable with bleak's Windows WinRT backend (COM apartment per thread)
 and regressed discovery/connection. This single-loop model is the same shape
 the original single-device link used, now generalised to N decks.
 
-The firmware stops advertising while a central is connected on classic ESP32
-(the C3 re-advertises). Discovery alone therefore cannot find an already
-connected deck: we cache each deck's address (persisted to a JSON file) and
-try the cached address directly, exactly like the original link did.
+The firmware re-advertises every ~1.5s on every target (classic ESP32 and C3
+alike), so an already-connected deck stays visible to a scan. The address cache
+(persisted to a JSON file) is still used as a fast path at startup: scanning
+takes seconds and Windows may momentarily fail to resolve the name of a deck
+whose HID link is already up.
+
+Link lifecycle (WS-271): ``dev_id`` - not the BLE address - is the identity of a
+deck. One deck therefore owns at most one session: a re-pair or merged-flash
+that changes the address retires the old session before the new one starts, an
+address with no scan hit and no connection is eventually dropped, and discovery
+pauses while every known deck is connected so background scanning cannot
+disturb live links.
 
 The characteristics are encrypted-only, so an unbonded client gets a security
 error; we pair on demand and retry once.
@@ -35,6 +43,7 @@ error; we pair on demand and retry once.
 import asyncio
 import json
 import threading
+import time
 import traceback
 
 SVC = "b1d3c0de-0001-4a5b-9c6d-1a2b3c4d5e6f"
@@ -46,11 +55,26 @@ TX = "b1d3c0de-0003-4a5b-9c6d-1a2b3c4d5e6f"
 DEVICE_PREFIX = "BindDeck"
 SCAN_TIMEOUT = 8.0
 RECONNECT_DELAY = 3.0
+MAX_RECONNECT_DELAY = 15.0
 DISCOVER_INTERVAL = 5.0
+# While every tracked deck is connected there is nothing left to discover, and
+# scanning from Windows only disturbs the live links. Wake at this interval to
+# notice a disconnect instead of running a full scan every DISCOVER_INTERVAL.
+IDLE_INTERVAL = 15.0
+# In that idle state a scan still runs occasionally, so a deck powered on later
+# is picked up without restarting the app - just far less often than 5s.
+IDLE_SCAN_INTERVAL = 45.0
+# A link that was neither seen in a scan nor able to hold a connection for this
+# long is abandoned: its session stops and its address leaves the cache. A later
+# scan re-adds the deck if it comes back.
+STALE_AFTER = 90.0
 # A cached address that Windows reports as "not found" this many times in a
 # row is stale (e.g. the deck was cached under an old address); drop it instead
 # of retrying forever. A later scan re-adds the deck if it advertises again.
 MAX_NOT_FOUND = 5
+# Consecutive generic connect failures before we ask for a fresh scan instead of
+# hammering the cached address.
+MAX_CONNECT_FAILURES = 3
 
 # bleak is imported lazily (see _load_bleak) rather than at module import time:
 # importing it once the app's own imports have all settled avoids ordering
@@ -122,11 +146,43 @@ class BleLink:
         self._queue = None
         self._connected = False
         self._not_found = 0
+        self._failures = 0
         self._lock = threading.Lock()
+        self._task = None
+        self._dev_key = dev_id or ("@" + address)
+        self._stopped = False
+        self._last_seen = time.monotonic()
 
     @property
     def available(self) -> bool:
         return _BleakClient is not None
+
+    @property
+    def stopped(self) -> bool:
+        return self._stopped
+
+    @property
+    def last_seen(self) -> float:
+        return self._last_seen
+
+    def touch(self):
+        """Record that this deck is still visible / still connected."""
+        self._last_seen = time.monotonic()
+
+    def stop(self):
+        """Retire the session: the connect/reconnect loop exits and the link is
+        closed. Safe to call from any thread; idempotent."""
+        if self._stopped:
+            return
+        self._stopped = True
+        with self._lock:
+            self._connected = False
+        task, loop = self._task, self._loop
+        if task is not None and loop is not None and not task.done():
+            try:
+                loop.call_soon_threadsafe(task.cancel)
+            except RuntimeError:
+                pass  # loop already closed
 
     @property
     def connected(self) -> bool:
@@ -170,6 +226,7 @@ class BleLinkManager:
         self._scan_lock = None
         self._running = False
         self._last_scan_sig = None
+        self._force_scan = False
         self._load_cache()
 
     # ---- properties used by the app --------------------------------------
@@ -241,19 +298,54 @@ class BleLinkManager:
         self._scan_lock = asyncio.Lock()
 
         # First try every cached address directly - the deck may already be
-        # connected to the OS via HID and therefore not advertising.
+        # connected to the OS via HID and the scan is not needed to reach it.
         for addr, info in list(self._known.items()):
             self._ensure_link(addr, info.get("dev_id", ""), info.get("name", ""))
 
         print("[ble] scanning for BindDeck* ...")
         first = True
+        last_idle_scan = time.monotonic()
         while self._running:
+            with self._lock:
+                links = list(self._links.values())
+                force = self._force_scan
+                self._force_scan = False
+            pending = [l for l in links if not l.connected and not l.stopped]
+            if links and not pending and not force:
+                # Every known deck is up. Scanning now only perturbs the live
+                # links (and can make Windows drop one), so keep discovery out
+                # of the way and only look around occasionally for a new deck.
+                await asyncio.sleep(IDLE_INTERVAL)
+                self._prune_stale()
+                if time.monotonic() - last_idle_scan >= IDLE_SCAN_INTERVAL:
+                    last_idle_scan = time.monotonic()
+                    try:
+                        await self._discover_and_connect(quick=False)
+                    except Exception as e:  # noqa: BLE001
+                        print("[ble] discovery loop error:", type(e).__name__, e)
+                continue
             try:
                 await self._discover_and_connect(quick=first)
             except Exception as e:  # noqa: BLE001
                 print("[ble] discovery loop error:", type(e).__name__, e)
             first = False
+            self._prune_stale()
             await asyncio.sleep(DISCOVER_INTERVAL)
+
+    def _prune_stale(self):
+        """Abandon links that have neither been seen nor connected for a while.
+
+        Without this a deck that moved to a new address (re-pair / merged flash)
+        leaves its old session reconnecting forever, and the two links fight
+        over the same radio."""
+        now = time.monotonic()
+        with self._lock:
+            links = list(self._links.values())
+        for link in links:
+            if link.connected:
+                link.touch()
+            elif not link.stopped and now - link.last_seen > STALE_AFTER:
+                self._drop_link(link, f"not seen or connected for {int(STALE_AFTER)}s")
 
     # ---- discovery --------------------------------------------------------
     async def _scan(self, timeout):
@@ -365,38 +457,97 @@ class BleLinkManager:
             if prev.get("dev_id") == dev_id and prev.get("name") == name:
                 return
             self._known[address] = {"dev_id": dev_id, "name": name}
+            if dev_id:
+                # A deck that re-paired under a new address must not leave its
+                # old address in the cache, or the next launch resurrects a dead
+                # session (WS-271).
+                for addr, info in list(self._known.items()):
+                    if addr != address and info.get("dev_id") == dev_id:
+                        self._known.pop(addr, None)
         self._save_cache()
 
     def _ensure_link(self, address, dev_id, name):
-        """Create a BleLink + its session coroutine if not already tracked.
+        """Track one session per deck, keyed by ``dev_id`` (WS-271).
+
+        ``_links_by_dev`` is the primary index: if the same deck later shows up
+        under another address (re-pair / merged flash / Windows address
+        rotation) the old session is retired before the new one starts, so one
+        deck can never hold two concurrent links. Legacy decks with no id
+        (``""``) are keyed by address, so several un-upgraded decks coexist.
         Called from the manager loop (or before it starts for cached ones)."""
+        cache_dirty = False
         with self._lock:
-            if address in self._links:
+            key = dev_id or ""
+            if not dev_id:
+                holder = self._links_by_dev.get("")
+                if holder is not None and holder.address != address:
+                    key = "@" + address
+
+            existing = self._links.get(address)
+            if existing is not None:
+                # Already tracked at this address. A later scan may have learned
+                # its name/id - update the index instead of adding a second link.
+                if existing._dev_key != key:
+                    if self._links_by_dev.get(existing._dev_key) is existing:
+                        self._links_by_dev.pop(existing._dev_key, None)
+                    existing._dev_key = key
+                    self._links_by_dev[key] = existing
+                existing.dev_id = dev_id
+                existing.name = name or existing.name
+                existing.touch()
                 return
+
+            prev = self._links_by_dev.get(key)
+            if prev is not None:
+                # Same deck, new address. Retire the old session first; leaving
+                # it running is what made a second deck unreachable and what
+                # accumulated zombies across days of use.
+                self._known.pop(prev.address, None)
+                cache_dirty = True
+                self._retire_link(prev, f"address changed {prev.address} -> {address}")
+
             link = BleLink(address, dev_id, name, self)
             link._loop = self._loop
+            link._dev_key = key
             self._links[address] = link
-            self._links_by_dev[dev_id] = link
+            self._links_by_dev[key] = link
+
+        if cache_dirty:
+            self._save_cache()
         print(f"[ble] deck {name or dev_id or address} ({address}) id={dev_id or '-'} -> connecting")
-        asyncio.ensure_future(self._device_session(link))
+        link._task = asyncio.ensure_future(self._device_session(link))
+
+    def _retire_link(self, link, reason):
+        """Stop a link's session and forget it, with no further reconnects."""
+        with self._lock:
+            if self._links.get(link.address) is link:
+                self._links.pop(link.address, None)
+            if self._links_by_dev.get(link._dev_key) is link:
+                self._links_by_dev.pop(link._dev_key, None)
+        link.stop()
+        print(f"[ble {link.dev_id or link.address}] {reason} - link retired")
 
     # ---- one device session ----------------------------------------------
     async def _device_session(self, link):
         tag = link.dev_id or "deck"
-        while self._running:
+        while self._running and not link.stopped:
             client = None
             try:
                 client = _BleakClient(link.address, timeout=20.0)
                 await client.connect()
                 if not client.is_connected:
                     raise RuntimeError("connect returned without a live link")
+                if link.stopped:
+                    return
                 await self._subscribe(link, client)
                 link._queue = asyncio.Queue()
                 with link._lock:
                     link._connected = True
                 link._not_found = 0
+                link._failures = 0
+                link.touch()
                 print(f"[ble {tag}] connected {client.address} mtu={getattr(client, 'mtu_size', '?')}")
-                while client.is_connected:
+                while client.is_connected and not link.stopped:
                     try:
                         cmd = await asyncio.wait_for(link._queue.get(), timeout=1.0)
                     except asyncio.TimeoutError:
@@ -405,7 +556,11 @@ class BleLinkManager:
                         await self._write(link, client, cmd)
                     except Exception as e:  # noqa: BLE001
                         print(f"[ble {tag}] write error:", e)
+            except asyncio.CancelledError:
+                raise
             except Exception as e:  # noqa: BLE001
+                if link.stopped:
+                    return
                 print(f"[ble {tag}] session error:", type(e).__name__, e)
                 if type(e).__name__ == "BleakDeviceNotFoundError":
                     link._not_found += 1
@@ -413,10 +568,18 @@ class BleLinkManager:
                         # This cached address no longer resolves (stale cache /
                         # deck advertising under another address). Stop
                         # retrying; a scan will re-add it if it advertises.
-                        self._drop_link(link)
+                        self._drop_link(link, f"address not found {MAX_NOT_FOUND}x")
                         return
                 else:
                     link._not_found = 0
+                    link._failures += 1
+                    if link._failures >= MAX_CONNECT_FAILURES:
+                        # Do not keep dialling a cached address that refuses:
+                        # ask discovery for a fresh scan (which may reveal the
+                        # deck under its new address).
+                        link._failures = 0
+                        self._force_scan = True
+                        print(f"[ble {tag}] connect keeps failing - forcing a rescan")
             finally:
                 with link._lock:
                     link._connected = False
@@ -426,19 +589,19 @@ class BleLinkManager:
                     except Exception:
                         pass
                 print(f"[ble {tag}] disconnected")
-            await asyncio.sleep(RECONNECT_DELAY)
+            if link.stopped:
+                break
+            # Back off when a deck refuses to connect instead of hammering it
+            # every RECONNECT_DELAY seconds.
+            delay = min(RECONNECT_DELAY * (1 + link._failures), MAX_RECONNECT_DELAY)
+            await asyncio.sleep(delay)
 
-    def _drop_link(self, link):
-        """Forget a stale address (link + cache) so we stop retrying it."""
+    def _drop_link(self, link, reason):
+        """Forget a dead address (link + cache) so we stop retrying it."""
         with self._lock:
-            if self._links.get(link.address) is link:
-                self._links.pop(link.address, None)
-            if self._links_by_dev.get(link.dev_id) is link:
-                self._links_by_dev.pop(link.dev_id, None)
             self._known.pop(link.address, None)
+        self._retire_link(link, reason)
         self._save_cache()
-        print(f"[ble {link.dev_id or link.address}] stale address {link.address} "
-              f"dropped after {MAX_NOT_FOUND} 'not found' errors")
 
     async def _subscribe(self, link, client):
         def _tx(_c, data: bytearray):
@@ -480,6 +643,17 @@ class BleLinkManager:
         """Send a command to the single deck identified by ``dev_id``."""
         with self._lock:
             link = self._links_by_dev.get(dev_id)
+            if link is None and dev_id:
+                # The index may still hold a link that was retired mid-scan.
+                link = next((l for l in self._links.values()
+                             if l.dev_id == dev_id and not l.stopped), None)
+            if link is None and not dev_id:
+                # Legacy "BindDeck" decks are keyed by address; with one of them
+                # present, an unaddressed command still has an obvious target.
+                legacy = [l for l in self._links.values()
+                          if l.dev_id == "" and not l.stopped]
+                if len(legacy) == 1:
+                    link = legacy[0]
         if link is None:
             return False
         return link.send(cmd)
