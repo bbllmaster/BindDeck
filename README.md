@@ -193,14 +193,26 @@ Forget about compiling code, installing Python, or using complex programming env
 
 ---
 
-## 🔗 Multiple Devices (In Progress — On This Branch)
+## 🔗 Multiple Devices, Primary Host and the OLED Settings Menu
 
-Running several BindDecks at once to expand your keys is **implemented on this branch but still new — treat it as experimental, not a stable release**:
+Running several BindDecks at once is **supported**:
 
-* **Firmware side (WS-267):** each device exposes a unique BLE name `BindDeck-XXXX` and tags its button events with a device id (`BTN:<devId>:<btn>`, where `btn` is `0`–`7` for the keys and `8` for the encoder press).
-* **PC side (WS-268):** `pc_script` scans for all `BindDeck-*` devices, connects/reconnects each one, and routes per-device configuration and events (device selector in the web UI; config stored per `deviceId`).
+* **Unique identity per deck:** each device advertises its own BLE name `BindDeck-XXXX` (the last two bytes of its MAC), its own IRK, and its own HID serial, model and PID. Windows therefore sees every deck as a separate keyboard and keeps them all connected at the same time, so each deck can be added or removed independently.
+* **Per-device events and configuration:** button events carry the device id (`BTN:<devId>:<btn>`, where `btn` is `0`–`7` for the keys and `8` for the encoder press). The PC app lists every `BindDeck-*` device, keeps each link alive and stores the configuration per `deviceId`, so each deck can have its own key map.
 
-Both sides have landed on this branch. Multi-device support is still being hardened, so expect rough edges before it is considered a stable release.
+### Single primary host
+
+* **HID input goes to the primary host only.** The first computer that subscribes to the HID report becomes the primary host; a second host (a phone, or another PC) can connect but never receives keystrokes or volume changes.
+* **The first HID host is bound.** Its identity address is stored in the device's NVS and every other computer or phone is **rejected at connection time** — even with the bound PC switched off, a phone cannot take over. The PC app on that same machine uses the same adapter address, so configuration (`CFG:` / `BTN:`) keeps working normally.
+
+### OLED settings menu
+
+* **Hold the rotary encoder press for ~1.5 s** in normal mode to open the menu. A short click keeps its usual meaning (F21 + `BTN:<devId>:8`).
+* Items: **`Host`** — the bound host address (read-only), **`Clear Host`** — erase the binding, **`Exit`**.
+* **Rotate** to move the selection, **click** to confirm, **hold** (~1.5 s) to leave.
+* **`Clear Host`** drops the live links and erases the stored bonds; the device shows *Host cleared / any host may pair* and the next host that connects and pairs becomes the new bound host.
+
+> **Upgrade note:** this firmware generation changed the IRK and the HID serial/model/PID (WS-273/274). After upgrading, **pair each deck once again** — a one-time step. Routine app-only updates keep the pairing, as described in the user manual.
 
 ---
 
@@ -407,14 +419,26 @@ Olvídate de compilar código, instalar Python o usar entornos de programación 
 
 ---
 
-## 🔗 Varios Dispositivos (En Progreso — En Esta Rama)
+## 🔗 Varios Dispositivos, Host Principal y Menú de Ajustes en el OLED
 
-Usar varios BindDeck a la vez para ampliar tus teclas está **implementado en esta rama pero sigue siendo nuevo — trátalo como experimental, no como una versión estable**:
+Usar varios BindDeck a la vez está **soportado**:
 
-* **Lado firmware (WS-267):** cada dispositivo expone un nombre BLE único `BindDeck-XXXX` y etiqueta sus eventos de botón con un id de dispositivo (`BTN:<devId>:<btn>`, donde `btn` es `0`–`7` para las teclas y `8` para el pulsador del encoder).
-* **Lado PC (WS-268):** `pc_script` busca todos los dispositivos `BindDeck-*`, conecta/reconecta cada uno y enruta la configuración y los eventos por dispositivo (selector de dispositivo en la interfaz web; configuración guardada por `deviceId`).
+* **Identidad única por dispositivo:** cada dispositivo anuncia su propio nombre BLE `BindDeck-XXXX` (los dos últimos bytes de su MAC), su propio IRK y su propio serial, modelo y PID de HID. Windows ve cada deck como un teclado independiente y mantiene todos conectados a la vez, así que cada deck se puede añadir o quitar de forma independiente.
+* **Eventos y configuración por dispositivo:** los eventos de botón llevan el id de dispositivo (`BTN:<devId>:<btn>`, donde `btn` es `0`–`7` para las teclas y `8` para el pulsador del encoder). La app de PC lista todos los dispositivos `BindDeck-*`, mantiene cada enlace y guarda la configuración por `deviceId`, de modo que cada deck puede tener su propio mapa de teclas.
 
-Ambos lados ya están en esta rama. El soporte multi-dispositivo aún se está afinando, así que espera asperezas antes de considerarlo una versión estable.
+### Un único host principal
+
+* **La entrada HID va solo al host principal.** El primer ordenador que se suscribe al informe HID pasa a ser el host principal; un segundo host (un móvil u otro PC) puede conectarse, pero nunca recibe pulsaciones ni cambios de volumen.
+* **El primer host HID queda vinculado.** Su dirección de identidad se guarda en la NVS del dispositivo y cualquier otro ordenador o móvil es **rechazado al conectar** — incluso con el PC vinculado apagado, un móvil no puede tomar el control. La app de PC de ese mismo equipo usa la misma dirección de adaptador, así que la configuración (`CFG:` / `BTN:`) sigue funcionando con normalidad.
+
+### Menú de ajustes en el OLED
+
+* **Mantén pulsado el botón del encoder ~1,5 s** en modo normal para abrir el menú. Una pulsación corta conserva su significado habitual (F21 + `BTN:<devId>:8`).
+* Opciones: **`Host`** — dirección del host vinculado (solo lectura), **`Clear Host`** — borra la vinculación, **`Exit`**.
+* **Gira** para mover la selección, **pulsa** para confirmar, **mantén pulsado** (~1,5 s) para salir.
+* **`Clear Host`** corta los enlaces activos y borra los vínculos guardados; la pantalla muestra *Host cleared / any host may pair* y el siguiente host que se conecte y empareje pasa a ser el nuevo host vinculado.
+
+> **Nota de actualización:** esta generación de firmware cambió el IRK y el serial/modelo/PID de HID (WS-273/274). Tras actualizar, **empareja cada dispositivo una vez más** — es un paso único. Las actualizaciones rutinarias de solo aplicación conservan el emparejamiento, como se explica en el manual de usuario.
 
 ---
 
@@ -621,14 +645,26 @@ ESP32 无法直接读取电池 4.2V，需用两个 10K 电阻把电压减半：
 
 ---
 
-## 🔗 多设备（进行中 — 已在本分支）
+## 🔗 多设备、主主机与 OLED 设置菜单
 
-同时运行多台 BindDeck 扩展按键**已在本分支实现，但仍属新功能——请按实验性对待，还不是稳定发布版**：
+同时运行多台 BindDeck **已受支持**：
 
-* **固件侧（WS-267）：** 每台设备暴露唯一 BLE 名 `BindDeck-XXXX`，并在按键事件里带上设备 ID（`BTN:<devId>:<btn>`，`btn` 为 `0`–`7` 表示按键、`8` 表示编码器按下）。
-* **电脑侧（WS-268）：** `pc_script` 会扫描所有 `BindDeck-*` 设备，逐台连接/自动重连，并按设备路由配置与事件（网页界面有设备选择栏，配置按 `deviceId` 分开保存）。
+* **每台设备身份唯一：** 每台设备广播自己的 BLE 名 `BindDeck-XXXX`（MAC 后两字节），拥有自己的 IRK、HID 序列号、型号与 PID。Windows 会把每台都识别成独立的键盘，可同时保持连接，每台都能独立添加或移除，互不影响。
+* **按设备区分的按键事件与配置：** 按键事件带设备 ID（`BTN:<devId>:<btn>`，`btn` 为 `0`–`7` 表示按键、`8` 表示编码器按下）。电脑端程序会列出所有 `BindDeck-*` 设备、逐台保持连接，并按 `deviceId` 分别保存配置，因此每台可以有各自的键位映射。
 
-两侧改动都已合入本分支。多设备支持仍在打磨中，正式当作稳定版发布前可能还有些粗糙之处。
+### 单主机控制
+
+* **HID 只发给主主机（primary host）。** 第一个订阅 HID 报告的电脑成为主主机；第二台主机（手机或另一台电脑）即使连上也收不到按键与音量。
+* **首个 HID 主机被绑定。** 它的身份地址保存在设备 NVS 中，其他电脑/手机在连接阶段就会被**直接拒绝**——即使绑定的 PC 已关机，手机也不能接管。同一台 PC 上的电脑端程序使用相同的适配器地址，所以 `CFG:` / `BTN:` 配置照常可用。
+
+### OLED 设置菜单
+
+* 正常模式下**长按编码器按下键约 1.5 秒**进入菜单；短按仍保持原意（F21 + `BTN:<devId>:8`）。
+* 菜单项：**`Host`** —— 已绑定主机的地址（只读）、**`Clear Host`** —— 清除绑定、**`Exit`**。
+* **旋转**切换、**单击**确认、**长按**（约 1.5 秒）退出。
+* **`Clear Host`** 会断开当前连接并清除已保存的配对信息，屏幕提示 *Host cleared / any host may pair*；之后重新连接并配对的主机会成为新的绑定主机。
+
+> **升级提示：** 这一代固件改动了 IRK 以及 HID 的序列号/型号/PID（WS-273/274）。升级后**每台设备需要重新配对一次**——这是一次性的。日常只更新应用分区的升级会保留配对，详见用户手册。
 
 ---
 

@@ -118,7 +118,33 @@ On the **PC statistics** screen, the small icon in the bottom-right corner shows
 
 ---
 
-## 7. Telemetry and Resource Monitor (PC Monitor)
+## 7. Multiple Decks, Primary Host and the Settings Menu
+
+**Connecting more than one deck.** Each deck advertises as `BindDeck-XXXX` (the last two bytes of its MAC), with its own IRK and its own HID serial/model/PID, so Windows registers every one of them as a separate keyboard and keeps them all connected. In the desktop app's device list, select the deck you want to work with — configuration and button events are kept per device, so each deck can have a different key map.
+
+**Single-host control.** Only the **primary host** receives keystrokes and volume changes. A phone or a second computer can connect, but the deck's HID output never goes to it.
+
+**Host binding.** The first HID host that connects is remembered in the device's NVS, and any other computer or phone is **rejected at connection time**. This also holds while the bound PC is switched off: a phone cannot take over just because the PC is gone. The desktop app on that same PC uses the same adapter address, so configuration (`CFG:` / `BTN:`) keeps working.
+
+**OLED settings menu.** Hold the **rotary encoder press for about 1.5 s** in normal mode. A short click keeps its usual meaning (`BTN:<devId>:8` + F21).
+
+| Item | What it does |
+|---|---|
+| `Host` | Shows the bound host address (read-only) |
+| `Clear Host` | Erases the binding, drops the live links and clears the stored bonds |
+| `Exit` | Closes the menu |
+
+Turn the encoder to move the selection, **click** to confirm, and **hold** (~1.5 s) to leave. After `Clear Host` the screen shows *Host cleared / any host may pair*.
+
+**Changing the host.** Open the menu → `Clear Host` → connect and pair from the new computer or phone. The first host to pair becomes the new bound host.
+
+**After a firmware upgrade.** This firmware generation changed the IRK and the HID serial/model/PID, so **each deck must be paired once again** after upgrading. It is a one-time step; later app-only updates keep the pairing.
+
+**Troubleshooting.** If you replaced the PC's Bluetooth adapter or its address changed, the deck will reject it as an unknown host. Use `Clear Host` and pair again. If Windows still shows the old device, remove it in *Settings → Bluetooth & devices* first.
+
+---
+
+## 8. Telemetry and Resource Monitor (PC Monitor)
 As long as the desktop application is open or minimised in the System Tray, it reads your computer's status in the background using *LibreHardwareMonitor*.
 On your BindDeck's statistics screen you will be able to see in real time:
 * **CPU and GPU Temperature** (in ºC).
@@ -128,7 +154,7 @@ If any of the temperatures exceeds 85ºC, the device screen will show a warning 
 
 ---
 
-## 8. Updating the Firmware
+## 9. Updating the Firmware
 
 There are two kinds of flash, and picking the wrong one is why pairing sometimes has to be redone:
 
@@ -143,7 +169,7 @@ Do **not** erase/format the flash for a routine update.
 
 ---
 
-## 9. Frequently Asked Questions / Troubleshooting
+## 10. Frequently Asked Questions / Troubleshooting
 
 * **The indicator is red and says "Disconnected":** Make sure the USB cable supports data transmission and not just charging. Close other programs that might be occupying the COM port (such as the Arduino Serial Monitor or VSCode).
 * **I press a button and it does nothing in Windows:** Verify that the device is properly paired via Bluetooth. On the classic ESP32 the USB cable carries the settings, but the actual keystrokes are always sent over Bluetooth (it acts as a wireless keyboard).
@@ -282,7 +308,33 @@ En la pantalla de **estadísticas del PC**, el icono de la esquina inferior dere
 
 ---
 
-## 7. Telemetría y Monitor de Recursos (PC Monitor)
+## 7. Varios Dispositivos, Host Principal y Menú de Ajustes
+
+**Conectar más de un dispositivo.** Cada deck se anuncia como `BindDeck-XXXX` (los dos últimos bytes de su MAC), con su propio IRK y su propio serial/modelo/PID de HID, así que Windows registra cada uno como un teclado independiente y los mantiene todos conectados. En la lista de dispositivos de la app de escritorio, selecciona el deck que quieras usar — la configuración y los eventos se guardan por dispositivo, de modo que cada uno puede tener su propio mapa de teclas.
+
+**Control de un solo host.** Solo el **host principal** recibe las pulsaciones y los cambios de volumen. Un móvil u otro ordenador puede conectarse, pero la salida HID del deck nunca le llega.
+
+**Vinculación del host.** El primer host HID que se conecta se guarda en la NVS del dispositivo y cualquier otro ordenador o móvil es **rechazado al conectar**. Esto vale también con el PC vinculado apagado: un móvil no puede tomar el control porque el PC no esté. La app de escritorio de ese mismo PC usa la misma dirección de adaptador, así que la configuración (`CFG:` / `BTN:`) sigue funcionando.
+
+**Menú de ajustes en el OLED.** Mantén pulsado el **botón del encoder unos 1,5 s** en modo normal. Una pulsación corta conserva su significado habitual (`BTN:<devId>:8` + F21).
+
+| Opción | Qué hace |
+|---|---|
+| `Host` | Muestra la dirección del host vinculado (solo lectura) |
+| `Clear Host` | Borra la vinculación, corta los enlaces activos y elimina los vínculos guardados |
+| `Exit` | Cierra el menú |
+
+Gira el encoder para mover la selección, **pulsa** para confirmar y **mantén pulsado** (~1,5 s) para salir. Tras `Clear Host` la pantalla muestra *Host cleared / any host may pair*.
+
+**Cambiar de host.** Abre el menú → `Clear Host` → conecta y empareja desde el nuevo ordenador o móvil. El primer host que se empareje pasa a ser el nuevo host vinculado.
+
+**Tras actualizar el firmware.** Esta generación de firmware cambió el IRK y el serial/modelo/PID de HID, así que **cada deck debe emparejarse una vez más** después de actualizar. Es un paso único; las actualizaciones posteriores de solo aplicación conservan el emparejamiento.
+
+**Solución de problemas.** Si cambiaste el adaptador Bluetooth del PC o su dirección ha cambiado, el deck lo rechazará como host desconocido. Usa `Clear Host` y vuelve a emparejar. Si Windows sigue mostrando el dispositivo antiguo, elimínalo primero en *Configuración → Bluetooth y dispositivos*.
+
+---
+
+## 8. Telemetría y Monitor de Recursos (PC Monitor)
 Mientras la aplicación de escritorio esté abierta o minimizada en la bandeja del sistema (System Tray), estará leyendo en segundo plano el estado de tu ordenador utilizando *LibreHardwareMonitor*.
 En la pantalla de estadísticas de tu BindDeck podrás ver en tiempo real:
 * **Temperatura de la CPU y GPU** (en ºC).
@@ -292,7 +344,7 @@ Si alguna de las temperaturas supera los 85ºC, la pantalla del dispositivo te m
 
 ---
 
-## 8. Actualizar el Firmware
+## 9. Actualizar el Firmware
 
 Hay dos tipos de grabación, y elegir la equivocada es la razón por la que a veces hay que volver a emparejar:
 
@@ -307,7 +359,7 @@ Las claves de emparejamiento Bluetooth se guardan en la partición `nvs` del dis
 
 ---
 
-## 9. Solución de Problemas Frecuentes
+## 10. Solución de Problemas Frecuentes
 
 * **El indicador está rojo y pone "Desconectado":** Asegúrate de que el cable USB soporta transmisión de datos y no solo carga. Cierra otros programas que puedan estar ocupando el puerto COM (como el monitor serie de Arduino o VSCode).
 * **Pulso un botón y no hace nada en Windows:** Comprueba que el dispositivo esté correctamente emparejado por Bluetooth. En el ESP32 clásico el cable USB envía los ajustes, pero las teclas reales siempre se envían por Bluetooth (actúa como un teclado inalámbrico).
@@ -447,7 +499,33 @@ Sep 30 2026 03:23:00
 
 ---
 
-## 7. 状态回传与资源监视
+## 7. 多台设备、主主机与设置菜单
+
+**连接多台设备。** 每台 BindDeck 都以 `BindDeck-XXXX`（MAC 后两字节）广播，拥有自己的 IRK 和 HID 序列号/型号/PID，因此 Windows 会把每一台都注册为独立键盘，并可同时保持连接。在桌面程序的设备列表里选择要操作的那一台——配置和按键事件都按设备分开保存，所以每台可以有各自的键位映射。
+
+**单主机控制。** 只有**主主机（primary host）**能收到按键与音量变化。手机或第二台电脑可以连上，但设备的 HID 输出永远不会发给它。
+
+**主机绑定。** 第一个连上的 HID 主机地址会记在设备 NVS 里，其他任何电脑或手机在**连接阶段就会被拒绝**。这一点在绑定的 PC 关机时同样成立：手机不会因为 PC 不在就接管。同一台 PC 上的桌面程序使用相同的适配器地址，所以 `CFG:` / `BTN:` 配置照常工作。
+
+**OLED 设置菜单。** 正常模式下**长按编码器按下键约 1.5 秒**即可进入；短按仍是原来的含义（`BTN:<devId>:8` + F21）。
+
+| 菜单项 | 作用 |
+|---|---|
+| `Host` | 显示已绑定的主机地址（只读） |
+| `Clear Host` | 清除绑定，断开当前连接并删除已保存的配对信息 |
+| `Exit` | 退出菜单 |
+
+旋转切换选项，**单击**确认，**长按**（约 1.5 秒）退出。执行 `Clear Host` 后屏幕提示 *Host cleared / any host may pair*。
+
+**更换主机。** 打开菜单 → `Clear Host` → 用新的电脑或手机连接并配对，第一个配对成功的主机就成为新的绑定主机。
+
+**升级固件之后。** 这一代固件改动了 IRK 以及 HID 的序列号/型号/PID，**每台设备升级后都需要重新配对一次**。这只是一次性步骤；之后只更新应用分区的升级会保留配对。
+
+**故障排查。** 如果换了电脑的蓝牙适配器、或适配器地址发生变化，设备会把它当成未知主机拒绝。用 `Clear Host` 清除绑定后重新配对即可。如果 Windows 里还留着旧设备记录，先到 *设置 → 蓝牙和其他设备* 里删除它。
+
+---
+
+## 8. 状态回传与资源监视
 
 只要上位机程序处于打开或最小化到托盘的状态，它就会在后台用 *LibreHardwareMonitor* 读取你电脑的状态。
 在 BindDeck 的状态界面上可以实时看到：
@@ -458,7 +536,7 @@ Sep 30 2026 03:23:00
 
 ---
 
-## 8. 更新固件
+## 9. 更新固件
 
 有两种烧写方式，选错了就是"为什么每次都要重新配对"的原因：
 
@@ -473,7 +551,7 @@ Sep 30 2026 03:23:00
 
 ---
 
-## 9. 常见问题与排障
+## 10. 常见问题与排障
 
 * **指示灯红色、显示"未连接"**：确认 USB 线支持数据传输（不只是充电线）。关掉可能占用串口的程序（Arduino 串口监视器、VSCode 等）。
 * **按了键 Windows 没反应**：确认设备已正确蓝牙配对。经典 ESP32 上 USB 只负责传配置，**按键永远走蓝牙**（它是无线键盘）。
