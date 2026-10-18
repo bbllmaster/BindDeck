@@ -1,18 +1,41 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_data_files
+#
+# Single source of truth for the Windows build. build.bat runs
+# `python -m PyInstaller --clean BindDeck.spec`, so the CLI flags and this file
+# can never drift apart again.
 
-datas = [('templates', 'templates'), ('static', 'static'), ('LibreHardwareMonitor', 'LibreHardwareMonitor'), ('firmware.bin', '.'), ('SoundVolumeView.exe', '.')]
-datas += collect_data_files('esptool')
+from PyInstaller.utils.hooks import collect_all
 
-# ble_link is a local module; bleak pulls in its platform backend dynamically.
-# If BLE fails in the packaged exe, add --collect-all bleak.
-hiddenimports = ['ble_link', 'bleak']
+# Assets the app reads at runtime from base_path (sys._MEIPASS in one-file mode).
+datas = [
+    ('templates', 'templates'),
+    ('static', 'static'),
+    ('LibreHardwareMonitor', 'LibreHardwareMonitor'),
+    ('firmware.bin', '.'),            # "Install Official Firmware"
+    ('SoundVolumeView.exe', '.'),     # audio device switching
+]
+
+# These packages load submodules / binaries / data dynamically and are easily
+# missed by static analysis. collect_all makes the frozen exe match a source
+# run: esptool (flashing), bleak + winrt (BLE config channel), webview (the
+# window), comtypes + pycaw (volume).
+binaries = []
+hiddenimports = ['ble_link']
+for _pkg in ('esptool', 'bleak', 'winrt', 'webview', 'comtypes', 'pycaw'):
+    try:
+        _d, _b, _h = collect_all(_pkg)
+        datas += _d
+        binaries += _b
+        hiddenimports += _h
+    except Exception:
+        # Package not installed on this build machine; skip it.
+        pass
 
 
 a = Analysis(
     ['pc_monitor.py'],
     pathex=[],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

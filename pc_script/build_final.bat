@@ -1,2 +1,6 @@
-copy /Y "..\.pio\build\esp32dev\firmware.bin" "firmware.bin"
-python -m PyInstaller --noconfirm --onefile --windowed --icon="static/logo.ico" --add-data "templates;templates/" --add-data "static;static/" --add-data "LibreHardwareMonitor;LibreHardwareMonitor/" --add-data "firmware.bin;." --add-data "SoundVolumeView.exe;." --collect-data esptool --hidden-import ble_link --collect-all bleak "pc_monitor.py" --name "BindDeck"
+@echo off
+rem Kept for backwards compatibility. The maintained build lives in build.bat,
+rem which checks every step and only reports success when dist\BindDeck.exe
+rem actually exists.
+call "%~dp0build.bat"
+exit /b %ERRORLEVEL%
