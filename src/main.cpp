@@ -1900,7 +1900,8 @@ void loop() {
     static unsigned long _lastBleLog = 0;
     if (millis() - _lastBleLog > 3000) {
       _lastBleLog = millis();
-      log_e("[DBG ble] isConnected=%d", (int)bleKeyboard.isConnected());
+      log_e("[DBG ble] isConnected=%d hidPrimary=%d", (int)bleKeyboard.isConnected(),
+            bleKeyboard.primaryConn());
     }
 
     for(int i = 0; i < 8; i++) {

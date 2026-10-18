@@ -2,6 +2,13 @@
 
 #include <NimBLEDevice.h>
 #include <NimBLEHIDDevice.h>
+// WS-275: ble_hs_mbuf_from_flat() / ble_gatts_notify_custom() for directed HID
+// reports. Same conditional include NimBLE-Arduino's own headers use.
+#if defined(CONFIG_NIMBLE_CPP_IDF)
+#include "host/ble_hs.h"
+#else
+#include "nimble/nimble/host/include/host/ble_hs.h"
+#endif
 #include <Preferences.h>   // per-deck IRK persistence (WS-274)
 #include <esp_log.h>
 #include <esp_system.h>    // esp_fill_random()
@@ -62,6 +69,24 @@ static const uint8_t ASCII_MAP[128] = {
 // --- connection state -------------------------------------------------------
 static volatile bool s_connected = false;
 
+// WS-275: the one central that is allowed to receive HID input reports.
+// NimBLECharacteristic::notify() fans a report out to EVERY central subscribed
+// to that characteristic, so a phone that connects while the PC holds the HID
+// link also received (and acted on) volume/key reports. Remember the first
+// central that subscribes to a HID input report and address reports to it only.
+// The CFG service (PC app) subscribes to its own TX characteristic and never
+// touches these callbacks, so it can neither claim nor lose this slot.
+static volatile uint16_t s_hid_conn = BLE_HS_CONN_HANDLE_NONE;
+
+// Send one report to exactly one connection. ble_gatts_notify_custom() consumes
+// (and frees) the mbuf, on success and on failure alike, so we never free it.
+static void notifyOne(uint16_t conn, NimBLECharacteristic* ch, const uint8_t* data, size_t len) {
+  if (conn == BLE_HS_CONN_HANDLE_NONE || ch == nullptr || data == nullptr || len == 0) return;
+  struct os_mbuf* om = ble_hs_mbuf_from_flat(data, (uint16_t)len);
+  if (om == nullptr) return;
+  ble_gatts_notify_custom(conn, ch->getHandle(), om);
+}
+
 // Return this deck's own 128-bit Identity Resolving Key, generating and
 // persisting one on first boot. Without this every deck handed the same
 // hard-coded NimBLE default IRK to the OS, which is what made Windows treat
@@ -95,6 +120,36 @@ static void getOrCreateIrk(uint8_t irk[16]) {
   if (prefsOk) p.end();
 }
 
+// WS-275: HID input-report subscription tracking. Only reports (0x0001) or
+// indications (0x0002) in subValue mean "this central wants HID input".
+class HidReportCB : public NimBLECharacteristicCallbacks {
+  void onSubscribe(NimBLECharacteristic* ch, ble_gap_conn_desc* desc, uint16_t subValue) override {
+    if (desc == nullptr) return;
+    const uint16_t conn = desc->conn_handle;
+
+    if (!(subValue & 0x0003)) {   // subscription cleared
+      if (conn == s_hid_conn) {
+        ESP_LOGE("BIND", "[ble] HID primary conn=0x%04X addr=%s unsubscribed -> none",
+                 conn, NimBLEAddress(desc->peer_ota_addr).toString().c_str());
+        s_hid_conn = BLE_HS_CONN_HANDLE_NONE;
+      }
+      return;
+    }
+
+    if (s_hid_conn == BLE_HS_CONN_HANDLE_NONE) {
+      s_hid_conn = conn;
+      ESP_LOGE("BIND", "[ble] HID primary conn=0x%04X addr=%s (char=0x%04X sub=0x%04X)",
+               conn, NimBLEAddress(desc->peer_ota_addr).toString().c_str(),
+               ch ? ch->getHandle() : 0, subValue);
+    } else if (conn != s_hid_conn) {
+      // First subscriber wins for the whole session; a second central (phone)
+      // is acknowledged but never receives HID input.
+      ESP_LOGE("BIND", "[ble] HID extra subscriber conn=0x%04X addr=%s ignored (primary=0x%04X)",
+               conn, NimBLEAddress(desc->peer_ota_addr).toString().c_str(), s_hid_conn);
+    }
+  }
+};
+
 class HidServerCB : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* s) override {
     // NimBLE allows several centrals (Windows HID plus the config app). Track
@@ -123,6 +178,17 @@ class HidServerCB : public NimBLEServerCallbacks {
     ESP_LOGE("BIND", "[ble] disconnected n=%d%s",
              (int)(s ? s->getConnectedCount() : 0),
              s_connected ? " (still connected)" : " -> re-advertising");
+  }
+  // WS-275: when the primary HID host goes away, stop sending reports until a
+  // new central subscribes. Do NOT promote an already-connected second host
+  // (the phone that just connected) - that would hand it control exactly when
+  // the user put the PC away.
+  void onDisconnect(NimBLEServer* s, ble_gap_conn_desc* desc) override {
+    if (desc && desc->conn_handle == s_hid_conn) {
+      ESP_LOGE("BIND", "[ble] HID primary conn=0x%04X addr=%s disconnected -> none",
+               desc->conn_handle, NimBLEAddress(desc->peer_ota_addr).toString().c_str());
+      s_hid_conn = BLE_HS_CONN_HANDLE_NONE;
+    }
   }
 };
 
@@ -191,6 +257,10 @@ void BleKeyboard::begin() {
   _hid->reportMap((uint8_t*)HID_REPORT_MAP, sizeof(HID_REPORT_MAP));
   _inputKbd      = _hid->inputReport(1);
   _inputConsumer = _hid->inputReport(2);
+  // WS-275: learn which central is the HID host (the first to subscribe).
+  HidReportCB* reportCB = new HidReportCB();
+  _inputKbd->setCallbacks(reportCB);
+  _inputConsumer->setCallbacks(reportCB);
   _hid->setBatteryLevel(_battery);
   // Create the CFG/CMD service on the same server BEFORE services are started.
   bool cfgOk = bleConfig.begin(_server);
@@ -211,6 +281,7 @@ void BleKeyboard::begin() {
   adv->start();
   ESP_LOGE("BIND", "[ble] advertising name=\"%s\" addr=%s", _name,
            NimBLEDevice::getAddress().toString().c_str());
+  ESP_LOGE("BIND", "[ble] HID primary: none (waiting for a HID report subscriber)");
   ESP_LOGE("BIND", "[ble] HID identity: model=\"%s\" serial=\"%s\" pnp=%02X:%04X:%04X:%04X",
            _name, _name, 0x02, 0x1234, pid, 0x0100);
 }
@@ -234,8 +305,12 @@ void BleKeyboard::setBatteryLevel(uint8_t level) {
 void BleKeyboard::sendKeyboard() {
   if (!s_connected || !_inputKbd) return;
   uint8_t report[8] = { _modifiers, 0, _keys[0], _keys[1], _keys[2], _keys[3], _keys[4], _keys[5] };
-  _inputKbd->setValue(report, sizeof(report));
-  _inputKbd->notify();
+  _inputKbd->setValue(report, sizeof(report));   // keep it readable
+  notifyOne(s_hid_conn, _inputKbd, report, sizeof(report));
+}
+
+int BleKeyboard::primaryConn() const {
+  return (s_hid_conn == BLE_HS_CONN_HANDLE_NONE) ? -1 : (int)s_hid_conn;
 }
 
 size_t BleKeyboard::press(uint8_t k) {
@@ -301,9 +376,9 @@ size_t BleKeyboard::write(const MediaKeyReport& k) {
   uint8_t on[2]  = { (uint8_t)(k.usage & 0xFF), (uint8_t)(k.usage >> 8) };
   uint8_t off[2] = { 0, 0 };
   _inputConsumer->setValue(on, sizeof(on));
-  _inputConsumer->notify();
+  notifyOne(s_hid_conn, _inputConsumer, on, sizeof(on));
   delay(10);
   _inputConsumer->setValue(off, sizeof(off));
-  _inputConsumer->notify();
+  notifyOne(s_hid_conn, _inputConsumer, off, sizeof(off));
   return 1;
 }

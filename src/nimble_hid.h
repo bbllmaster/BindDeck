@@ -59,6 +59,10 @@ public:
   size_t write(uint8_t c);
   size_t write(const MediaKeyReport& k);
 
+  // WS-275: connection handle of the "primary" central (the one whose HID
+  // report subscription receives our input reports), or -1 when none is set.
+  int    primaryConn() const;
+
 private:
   void sendKeyboard();
 
