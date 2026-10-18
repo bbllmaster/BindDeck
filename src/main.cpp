@@ -1878,14 +1878,17 @@ void loop() {
     // channel open). Logs the firmware's view of the BLE HID connection so we
     // can tell a missing key-send apart from a key-send the OS ignores. ---
     // Keep the device discoverable while connected, otherwise a config app can
-    // never find it (the stack stops advertising once the link is up).
-#ifdef TARGET_ESP32C3
+    // never find it after it restarts (the NimBLE stack stops advertising once
+    // the HID link is up). This used to be C3-only, which meant classic ESP32
+    // decks vanished from every scan while Windows held the HID link - the app
+    // then showed a red dot and could not reconnect until the pairing was
+    // deleted. NimBLE supports multiple connections (default 3), so
+    // re-advertising here lets the PC app attach as a second central.
     static unsigned long _lastAdvKick = 0;
     if (millis() - _lastAdvKick > 1500) {
       _lastAdvKick = millis();
       bleKeyboard.keepAdvertising();
     }
-#endif
 
     static unsigned long _lastBleLog = 0;
     if (millis() - _lastBleLog > 3000) {
