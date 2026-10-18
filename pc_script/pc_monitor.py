@@ -870,6 +870,66 @@ def _sync_device_cfg(new_cfg, old_cfg, dev_id=None, force=False):
             time.sleep(0.1)
 
 
+def _connected_dev_ids():
+    """dev_ids of decks the BLE manager currently has connected."""
+    if ble_link_obj is None:
+        return []
+    try:
+        return [d.get("dev_id") for d in ble_link_obj.devices()
+                if d.get("connected") and d.get("dev_id")]
+    except Exception:
+        return []
+
+
+def _mirror_global_to_single_deck():
+    """For a single-deck setup, keep the global config and that deck's entry
+    identical after a global save.
+
+    A button action can be resolved from the per-device entry (BTN: side
+    channel) or the global config (HID fallback). If the user edits while the
+    picker is on "Default / All", that edit lands in the global config, but an
+    older per-device entry would otherwise keep shadowing it on the BTN path -
+    which looked like "saved but the action did not change". Syncing the two
+    layers for the sole deck removes that ambiguity (multi-deck setups keep
+    their independent per-device overrides)."""
+    devices = config.get("devices")
+    if not isinstance(devices, dict):
+        return
+    ids = _connected_dev_ids()
+    if len(ids) > 1:
+        return  # multi-deck: keep per-device overrides independent
+    if len(ids) == 1:
+        target = ids[0]
+    elif len(devices) == 1:
+        target = next(iter(devices.keys()))
+    else:
+        return
+    dev = devices.get(target)
+    if not isinstance(dev, dict):
+        dev = {}
+        devices[target] = dev
+    dev["keys"] = dict(config.get("keys") or {})
+    dev["esp32"] = dict(config.get("esp32") or {})
+
+
+def _mirror_device_to_global(device_id):
+    """Inverse of the above: after a per-device save, make the global config
+    match that sole deck so the HID fallback uses the same actions."""
+    devices = config.get("devices") or {}
+    ids = _connected_dev_ids()
+    if len(ids) > 1:
+        return  # multi-deck: keep per-device overrides independent
+    sole = (len(ids) == 1 and ids[0] == device_id) or \
+           (len(devices) == 1 and device_id in devices)
+    if not sole:
+        return
+    dev = devices.get(device_id) or {}
+    if isinstance(dev.get("keys"), dict):
+        config["keys"] = dict(dev["keys"])
+    if isinstance(dev.get("esp32"), dict):
+        config["esp32"] = dict(dev["esp32"])
+
+
 @app.route('/api/config', methods=['GET', 'POST'])
 def api_config():
     global config
@@ -887,6 +947,7 @@ def api_config():
                     base.update(new_cfg[sub])
                 merged[sub] = base
             config.setdefault("devices", {})[device_id] = merged
+            _mirror_device_to_global(device_id)
             save_config()
             # Push only to that deck over BLE (and broadcast so a WiFi/USB copy
             # of the same deck also gets it).
@@ -902,7 +963,11 @@ def api_config():
             new_cfg["keys"] = old_keys
         if "esp32" not in new_cfg:
             new_cfg["esp32"] = old_esp32
+        if "devices" not in new_cfg:
+            # A partial save must not drop the per-device overrides.
+            new_cfg["devices"] = config.get("devices", {})
         config = new_cfg
+        _mirror_global_to_single_deck()
         save_config()
 
         # Send over USB serial when open, over the BLE config link when it is
