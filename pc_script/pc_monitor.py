@@ -288,8 +288,12 @@ DEVICE_PROFILES = {
         "label": "ESP32",
         "default_pins": [13, 12, 14, 27, 32, 33, 25, 26],
         "allowed_pins": None,
-        "reserved": {4, 5, 18, 19, 21, 22},
-        "hint": "Reserved: 4, 5 (OLED), 18, 19 (UART), 21 (encoder DT), 22 (encoder CLK).",
+        # GPIO6-11 are the SPI flash lines on classic ESP32. Driving them as
+        # buttons stalls the flash controller and resets the chip, which is
+        # exactly what happened when the C3 default pin set was force-synced
+        # to a classic board (device dropped off BLE -> red dot).
+        "reserved": {4, 5, 6, 7, 8, 9, 10, 11, 18, 19, 21, 22},
+        "hint": "Reserved: 4,5 (OLED), 6-11 (SPI flash - DO NOT USE), 18,19 (UART), 21,22 (encoder).",
     },
     "esp32c3": {
         "label": "ESP32-C3",
@@ -303,9 +307,23 @@ DEVICE_PROFILES = {
 def get_device_type():
     return config.get("app", {}).get("deviceType", "esp32")
 
+def _active_chip():
+    """Chip the connected device actually reports (VERSION:), else the UI's
+    selected type. Using the real chip is what prevents a C3 pin set from being
+    force-synced onto a classic ESP32 (and resetting it)."""
+    try:
+        chip = (fw_info.get("chip") or "").strip().lower()
+    except Exception:
+        chip = ""
+    if chip in ("c3", "esp32c3", "esp32-c3"):
+        return "esp32c3"
+    if chip == "esp32":
+        return "esp32"
+    return get_device_type()
+
 def get_profile(device_type=None):
     if device_type is None:
-        device_type = get_device_type()
+        device_type = _active_chip()
     return DEVICE_PROFILES.get(device_type, DEVICE_PROFILES["esp32"])
 
 _RESERVED_PINS = DEVICE_PROFILES["esp32"]["reserved"]  # legacy alias
@@ -833,18 +851,23 @@ def _sync_device_cfg(new_cfg, old_cfg, dev_id=None, force=False):
         send_to_device(f"CFG:TZ:{tz}", dev_id)
         time.sleep(0.1)
 
-    # Button GPIOs — only send when the pin set actually changed
+    # Button GPIOs — send only when the pin set actually changed. Deliberately
+    # NOT re-sent on a forced sync: re-applying an unchanged (possibly stale or
+    # wrong-chip) pin set is what reset classic boards when the header sync was
+    # clicked. An explicit pin change (or the Settings "Save" pins button via
+    # /api/sync_pins) still sends it, after validation.
     new_pins = new_esp32.get("pins")
     old_pins = old_esp32.get("pins")
     print(f"[DBG CFG:PINS] old_pins={old_pins!r} new_pins={new_pins!r} dev={dev_id}")
-    if force or (new_pins and old_pins and str(new_pins) != str(old_pins)):
+    if new_pins and str(new_pins) != str(old_pins):
         if _valid_pin_set(new_pins):
             pins_str = ",".join(str(int(p)) for p in new_pins)
             send_to_device(f"CFG:PINS:{pins_str}", dev_id)
             print(f"[DBG CFG:PINS] SENT -> CFG:PINS:{pins_str} dev={dev_id}")
             time.sleep(0.1)
         else:
-            print(f"[DBG CFG:PINS] REJECTED by _valid_pin_set: {new_pins!r}")
+            print(f"[DBG CFG:PINS] REJECTED for chip={_active_chip()} "
+                  f"(flash/reserved pin): {new_pins!r} - NOT sent, device left untouched")
 
     # Check if key animations changed
     changed_anims = False

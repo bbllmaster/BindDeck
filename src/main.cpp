@@ -244,6 +244,11 @@ bool isValidButtonPin(int pin) {
   if (pin >= 11 && pin <= 17) return false;
 #else
   if (pin < 0 || pin > 39) return false;            // ESP32 has GPIO 0-39
+  // Classic ESP32: GPIO6-11 are the SPI flash lines (CLK / SD0-SD3 / VDD_SDIO).
+  // Driving them as buttons starves the flash controller -> CPU stall /
+  // watchdog reset. Reject them even if an old PC config force-sends a C3 pin
+  // set to this board.
+  if (pin >= 6 && pin <= 11) return false;
 #endif
   for (int i = 0; i < NUM_OCCUPIED; i++) {
     if (pin == OCCUPIED_PINS[i]) return false;
