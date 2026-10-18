@@ -3,6 +3,8 @@
 #include <NimBLEDevice.h>
 #include <NimBLEHIDDevice.h>
 #include <esp_log.h>
+#include <cstdlib>
+#include <cstring>
 #include "ble_config.h"   // secondary GATT service for CFG/CMD over BLE
 
 // ---------------------------------------------------------------------------
@@ -109,7 +111,28 @@ void BleKeyboard::begin() {
 
   _hid = new NimBLEHIDDevice(_server);
   _hid->manufacturer(_man);
-  _hid->pnp(0x02, 0x1234, 0x5678, 0x0100);
+
+  // --- unique HID identity (WS-273) ---------------------------------------
+  // Every deck used to expose the exact same VID/PID/version (1234:5678:0100)
+  // and a Device Information Service with no serial and no model number.
+  // Windows keys its HID device container on that identity, so a second deck
+  // was folded into the first one's node and could not be added until the
+  // first was removed. Derive the PID from the per-device name suffix
+  // ("BindDeck-1BD4" -> 0x1BD4) and publish a unique serial + model string.
+  uint16_t uid = 0;
+  const char* dash = strrchr(_name, '-');
+  if (dash && dash[1]) {
+    uid = (uint16_t)strtoul(dash + 1, nullptr, 16);
+  }
+  const uint16_t pid = (uint16_t)(0x5600 | (uid & 0x00FF));
+  _hid->pnp(0x02, 0x1234, pid, 0x0100);
+
+  NimBLEService* dis = _hid->deviceInfo();   // 0x180A
+  NimBLECharacteristic* cModel = dis->createCharacteristic((uint16_t)0x2A24, NIMBLE_PROPERTY::READ);
+  cModel->setValue((uint8_t*)_name, strlen(_name));
+  NimBLECharacteristic* cSerial = dis->createCharacteristic((uint16_t)0x2A25, NIMBLE_PROPERTY::READ);
+  cSerial->setValue((uint8_t*)_name, strlen(_name));
+
   _hid->hidInfo(0x00, 0x01);
   _hid->reportMap((uint8_t*)HID_REPORT_MAP, sizeof(HID_REPORT_MAP));
   _inputKbd      = _hid->inputReport(1);
@@ -134,6 +157,8 @@ void BleKeyboard::begin() {
   adv->start();
   ESP_LOGE("BIND", "[ble] advertising name=\"%s\" addr=%s", _name,
            NimBLEDevice::getAddress().toString().c_str());
+  ESP_LOGE("BIND", "[ble] HID identity: model=\"%s\" serial=\"%s\" pnp=%02X:%04X:%04X:%04X",
+           _name, _name, 0x02, 0x1234, pid, 0x0100);
 }
 
 bool BleKeyboard::isConnected() { return s_connected; }
