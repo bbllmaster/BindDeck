@@ -1121,9 +1121,63 @@ document.getElementById('keyAnim').addEventListener('change', (e) => {
     playOledPreview(val);
 });
 
+// ---- Debug log to file ---------------------------------------------------
+async function refreshLogStatus() {
+    try {
+        const res = await fetch('/api/log?t=' + new Date().getTime());
+        const st = await res.json();
+        const cb = document.getElementById('appLogToFile');
+        if (cb) cb.checked = !!st.enabled;
+        if (!config.app) config.app = {};
+        config.app.logToFile = !!st.enabled;
+        const p = document.getElementById('log-path-text');
+        if (p) {
+            p.innerText = st.path
+                ? st.path + (st.size ? ` (${(st.size / 1024).toFixed(0)} KB)` : '')
+                : '';
+        }
+    } catch (e) {
+        console.error('refreshLogStatus:', e);
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const cb = document.getElementById('appLogToFile');
+    if (cb) {
+        cb.addEventListener('change', async () => {
+            if (!config.app) config.app = {};
+            config.app.logToFile = cb.checked;
+            try {
+                await fetch('/api/log', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled: cb.checked })
+                });
+            } catch (e) {
+                console.error('log toggle:', e);
+            }
+            refreshLogStatus();
+        });
+    }
+    const openBtn = document.getElementById('btn-open-log');
+    if (openBtn) {
+        openBtn.addEventListener('click', async () => {
+            try {
+                const res = await fetch('/api/log/open', { method: 'POST' });
+                const d = await res.json();
+                if (!d.success) alert(d.error || 'Could not open the log folder');
+            } catch (e) {
+                console.error('open log folder:', e);
+            }
+        });
+    }
+    refreshLogStatus();
+});
+
 // SETTINGS MODAL
 document.getElementById('btn-open-settings').addEventListener('click', () => {
     document.getElementById('settings-modal').style.display = 'flex';
+    refreshLogStatus();
 });
 document.getElementById('btn-close-settings').addEventListener('click', () => {
     document.getElementById('settings-modal').style.display = 'none';

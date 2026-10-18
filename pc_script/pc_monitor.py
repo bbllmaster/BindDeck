@@ -25,6 +25,8 @@ subprocess.Popen = _NoWindowPopen
 import time
 import tempfile
 import re
+import datetime
+import collections
 
 import serial
 import serial.tools.list_ports
@@ -120,6 +122,177 @@ if getattr(sys, 'frozen', False):
 else:
     CONFIG_FILE = os.path.join(base_path, "macro_config.json")
 
+# --- DEBUG LOG FILE -------------------------------------------------------
+# A switchable tee for sys.stdout/stderr. All the existing print() diagnostics
+# ([ble], [cfg], [btn], [DBG ...]) are mirrored verbatim, which makes a shipped
+# (windowed) build debuggable without a console. A small in-memory ring buffer
+# is always kept, so enabling the switch still captures the lines that led up
+# to it (e.g. the BLE scan/connect attempts at startup).
+LOG_FILE = os.path.join(os.path.dirname(CONFIG_FILE), "binddeck.log")
+
+
+class _LogTee:
+    def __init__(self, stream, path, max_bytes=5 * 1024 * 1024, buffer_lines=400):
+        self._stream = stream
+        self._path = path
+        self._max_bytes = max_bytes
+        self._buf = collections.deque(maxlen=buffer_lines)
+        self._file = None
+        self._enabled = False
+        self._lock = threading.RLock()
+        self._partial = ""
+
+    @property
+    def path(self):
+        return self._path
+
+    @property
+    def enabled(self):
+        return self._enabled
+
+    def set_enabled(self, enabled):
+        enabled = bool(enabled)
+        with self._lock:
+            if enabled == self._enabled:
+                return
+            self._enabled = enabled
+            if enabled:
+                self._open_locked()
+                self._dump_buffer_locked()
+            else:
+                self._close_locked()
+
+    def _open_locked(self):
+        try:
+            folder = os.path.dirname(self._path)
+            if folder:
+                os.makedirs(folder, exist_ok=True)
+            self._rotate_locked()
+            self._file = open(self._path, "a", encoding="utf-8", buffering=1)
+            self._file.write(
+                f"\n===== BindDeck log {datetime.datetime.now():%Y-%m-%d %H:%M:%S} =====\n")
+            self._file.flush()
+        except Exception as e:  # noqa: BLE001
+            self._file = None
+            try:
+                print("[log] cannot open log file:", e, file=sys.__stderr__)
+            except Exception:
+                pass
+
+    def _close_locked(self):
+        if self._file is not None:
+            try:
+                self._file.flush()
+                self._file.close()
+            except Exception:
+                pass
+            self._file = None
+
+    def _rotate_locked(self):
+        try:
+            if os.path.exists(self._path) and os.path.getsize(self._path) > self._max_bytes:
+                bak = self._path + ".1"
+                if os.path.exists(bak):
+                    os.remove(bak)
+                os.replace(self._path, bak)
+        except Exception:
+            pass
+
+    def _dump_buffer_locked(self):
+        if self._file is None:
+            return
+        try:
+            for line in list(self._buf):
+                self._file.write(line)
+            self._file.flush()
+        except Exception:
+            pass
+
+    def write(self, data):
+        try:
+            if self._stream is not None:
+                self._stream.write(data)
+        except Exception:
+            pass
+        if not data:
+            return
+        with self._lock:
+            self._partial += data
+            while "\n" in self._partial:
+                line, self._partial = self._partial.split("\n", 1)
+                stamped = f"{datetime.datetime.now():%Y-%m-%d %H:%M:%S} {line}\n"
+                self._buf.append(stamped)
+                if self._enabled and self._file is not None:
+                    try:
+                        self._file.write(stamped)
+                        self._file.flush()
+                    except Exception:
+                        pass
+
+    def flush(self):
+        try:
+            if self._stream is not None:
+                self._stream.flush()
+        except Exception:
+            pass
+        with self._lock:
+            if self._file is not None:
+                try:
+                    self._file.flush()
+                except Exception:
+                    pass
+
+    def isatty(self):
+        try:
+            return bool(self._stream and self._stream.isatty())
+        except Exception:
+            return False
+
+    def fileno(self):
+        if self._stream is not None:
+            return self._stream.fileno()
+        raise OSError("log tee has no fileno")
+
+    @property
+    def encoding(self):
+        if self._stream is not None:
+            return getattr(self._stream, "encoding", "utf-8")
+        return "utf-8"
+
+
+_log_tee = None
+
+
+def install_log_capture(path):
+    global _log_tee
+    if _log_tee is not None:
+        return _log_tee
+    stream = sys.stdout if sys.stdout is not None else sys.__stdout__
+    tee = _LogTee(stream, path)
+    sys.stdout = tee
+    sys.stderr = tee
+    _log_tee = tee
+    return tee
+
+
+def set_log_file_enabled(enabled):
+    if _log_tee is not None:
+        _log_tee.set_enabled(enabled)
+
+
+def log_status():
+    if _log_tee is None:
+        return {"enabled": False, "path": None, "size": 0}
+    try:
+        size = os.path.getsize(_log_tee.path) if os.path.exists(_log_tee.path) else 0
+    except Exception:
+        size = 0
+    return {"enabled": bool(_log_tee.enabled), "path": _log_tee.path, "size": size}
+
+
+install_log_capture(LOG_FILE)
+
+
 serial_port = None
 # Last-known device IPv4, learned from the device's UDP packets on port 4211.
 # Used (as a bonus unicast path) to send CFG/CMD back over Wi-Fi; the primary
@@ -129,7 +302,7 @@ device_ip = None
 config = {
     "keys": {str(i): {"type": "none", "value": "", "anim": -1} for i in range(13, 22)},
     "esp32": {"animMode": 0, "encMode": 0, "pins": [13, 12, 14, 27, 32, 33, 25, 26], "sleepEnabled": True, "sleepTimeout": 5},
-    "app": {"theme": "dark", "lang": "en", "startup": False, "closeMode": "ask", "deviceType": "esp32", "connection_type": "usb"},
+    "app": {"theme": "dark", "lang": "en", "startup": False, "closeMode": "ask", "deviceType": "esp32", "connection_type": "usb", "logToFile": False},
     # Per-device overrides keyed by BLE dev_id (e.g. "A1B2"). When a device has
     # an entry here, its keys/esp32 config is used instead of the legacy global
     # "keys"/"esp32" above. The legacy keys remain the default for any device
@@ -1078,6 +1251,49 @@ def api_ble_devices():
     return jsonify({"available": True, "devices": ble_link_obj.devices()})
 
 
+@app.route("/api/log", methods=["GET", "POST"])
+def api_log():
+    """Read or switch the debug log file.
+
+    The toggle is persisted in ``config['app']['logToFile']`` so it survives a
+    restart. Enabling it immediately opens the file and flushes the recent
+    in-memory ring buffer, so the startup/BLE lines that led to the toggle are
+    included."""
+    if request.method == "POST":
+        data = request.json or {}
+        enabled = bool(data.get("enabled", False))
+        config.setdefault("app", {})["logToFile"] = enabled
+        save_config()
+        set_log_file_enabled(enabled)
+        return jsonify(log_status())
+    return jsonify(log_status())
+
+
+@app.route("/api/log/open", methods=["POST"])
+def api_log_open():
+    """Open the folder containing the log file (so the user can attach it)."""
+    try:
+        path = _log_tee.path if _log_tee is not None else LOG_FILE
+        folder = os.path.dirname(path) or "."
+        if sys.platform == "win32":
+            os.startfile(folder)
+        else:
+            subprocess.Popen(["xdg-open", folder])
+        return jsonify({"success": True, "path": path})
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/log/download", methods=["GET"])
+def api_log_download():
+    """Download the current log file (works from a normal browser too)."""
+    from flask import send_file
+    path = _log_tee.path if _log_tee is not None else LOG_FILE
+    if not os.path.exists(path):
+        return jsonify({"error": "no log file yet"}), 404
+    return send_file(path, as_attachment=True, download_name="binddeck.log")
+
+
 @app.route("/api/fw_version", methods=["GET"])
 def api_fw_version():
     """Ask the device which firmware it is running.
@@ -1644,6 +1860,10 @@ def kill_lhm():
 def main():
     start_lhm()
     load_config()
+
+    # Apply the persisted debug-log switch. Enabling here also flushes the
+    # ring buffer, so the startup lines before load_config are kept.
+    set_log_file_enabled(config.get("app", {}).get("logToFile", False))
     
     # Arrancar monitor de hardware en background
     threading.Thread(target=hardware_loop, daemon=True).start()

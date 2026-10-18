@@ -396,6 +396,24 @@
                 <p id="pins-error" style="font-size: 0.7rem; color: #ef4444; margin: 6px 0 0; display: none;"></p>
             </div>
 
+            <!-- Debug log to file (troubleshooting; off by default) -->
+            <div class="form-group" style="border-top: 1px solid var(--border); padding-top: 15px; margin-top: 15px;">
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+                    <div>
+                        <span style="display: block; font-weight: bold; margin-bottom: 5px;">Debug log file</span>
+                        <span style="font-size: 0.8rem; color: var(--text-muted);">Write console logs to a file for troubleshooting</span>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="appLogToFile">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+                <div style="display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap;">
+                    <button class="btn-secondary" id="btn-open-log" style="padding: 4px 10px; font-size: 0.72rem;">Open log folder</button>
+                    <span id="log-path-text" style="font-size: 0.66rem; color: var(--text-muted); word-break: break-all;"></span>
+                </div>
+            </div>
+
             <div class="form-group" style="flex-direction: row; align-items: center; justify-content: space-between; border-top: 1px solid var(--border); padding-top: 15px; margin-top: 15px;">
                 <div>
                     <span style="display: block; font-weight: bold; margin-bottom: 5px;" data-i18n="updates">Updates</span>
