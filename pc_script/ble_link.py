@@ -529,7 +529,9 @@ class BleLinkManager:
 
     # ---- one device session ----------------------------------------------
     async def _device_session(self, link):
-        tag = link.dev_id or "deck"
+        # Legacy decks have no id; the address still makes the log line unique.
+        tag = link.dev_id or link.address
+        was_connected = False
         while self._running and not link.stopped:
             client = None
             try:
@@ -543,6 +545,7 @@ class BleLinkManager:
                 link._queue = asyncio.Queue()
                 with link._lock:
                     link._connected = True
+                was_connected = True
                 link._not_found = 0
                 link._failures = 0
                 link.touch()
@@ -588,7 +591,9 @@ class BleLinkManager:
                         await client.disconnect()
                     except Exception:
                         pass
-                print(f"[ble {tag}] disconnected")
+                if was_connected:
+                    was_connected = False
+                    print(f"[ble {tag}] disconnected")
             if link.stopped:
                 break
             # Back off when a deck refuses to connect instead of hammering it
