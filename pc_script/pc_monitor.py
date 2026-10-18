@@ -789,19 +789,41 @@ def api_flash_local():
 
 @app.route('/api/sync_pins', methods=['POST'])
 def api_sync_pins():
-    """Force-send the current button GPIO set to the device, regardless of
-    whether it differs from the last-known state. Useful after a config
-    restore or when the device may have missed a CFG:PINS: earlier."""
-    pins = config.get("esp32", {}).get("pins")
-    if pins and _valid_pin_set(pins):
-        pins_str = ",".join(str(int(p)) for p in pins)
-        try:
-            ok = send_to_device(f"CFG:PINS:{pins_str}")
-            print(f"[DBG CFG:PINS] FORCE SENT -> CFG:PINS:{pins_str} ok={ok}")
-            return jsonify({"success": ok})
-        except Exception as e:
-            print("Error sending CFG:PINS:", e)
-    return jsonify({"success": False})
+    """Apply the button GPIOs to the device - the ONLY path that sends
+    ``CFG:PINS:``.
+
+    Pin changes are rare and dangerous (a wrong/foreign pin can stall the flash
+    controller and reset the board), so they are deliberately kept out of the
+    normal config save/sync. This endpoint is called explicitly from
+    "Settings -> Button GPIOs -> Save" and validates the set against the chip
+    the device actually reports before writing it. ``deviceId`` scopes it to
+    one deck; without it the global/default pin set is applied.
+    """
+    device_id = request.args.get("deviceId") or None
+    esp32 = None
+    if device_id:
+        dev = (config.get("devices") or {}).get(device_id)
+        if isinstance(dev, dict):
+            esp32 = dev.get("esp32")
+    if not isinstance(esp32, dict):
+        esp32 = config.get("esp32", {})
+    pins = (esp32 or {}).get("pins")
+    if not pins:
+        return jsonify({"success": False, "error": "no pins configured"}), 400
+    if not _valid_pin_set(pins):
+        print(f"[DBG CFG:PINS] REJECTED for chip={_active_chip()} "
+              f"(flash/reserved pin): {pins!r} - NOT sent")
+        return jsonify({"success": False,
+                        "error": f"invalid pins for {_active_chip()}"}), 400
+    pins_str = ",".join(str(int(p)) for p in pins)
+    try:
+        ok = send_to_device(f"CFG:PINS:{pins_str}", device_id)
+        print(f"[DBG CFG:PINS] APPLY (explicit) -> CFG:PINS:{pins_str} "
+              f"dev={device_id or 'default'} ok={ok}")
+        return jsonify({"success": ok})
+    except Exception as e:
+        print("Error sending CFG:PINS:", e)
+        return jsonify({"success": False, "error": str(e)}), 500
 
 def _sync_device_cfg(new_cfg, old_cfg, dev_id=None, force=False):
     """Push the esp32/keys CFG lines that differ between old_cfg and new_cfg.
@@ -851,23 +873,11 @@ def _sync_device_cfg(new_cfg, old_cfg, dev_id=None, force=False):
         send_to_device(f"CFG:TZ:{tz}", dev_id)
         time.sleep(0.1)
 
-    # Button GPIOs — send only when the pin set actually changed. Deliberately
-    # NOT re-sent on a forced sync: re-applying an unchanged (possibly stale or
-    # wrong-chip) pin set is what reset classic boards when the header sync was
-    # clicked. An explicit pin change (or the Settings "Save" pins button via
-    # /api/sync_pins) still sends it, after validation.
-    new_pins = new_esp32.get("pins")
-    old_pins = old_esp32.get("pins")
-    print(f"[DBG CFG:PINS] old_pins={old_pins!r} new_pins={new_pins!r} dev={dev_id}")
-    if new_pins and str(new_pins) != str(old_pins):
-        if _valid_pin_set(new_pins):
-            pins_str = ",".join(str(int(p)) for p in new_pins)
-            send_to_device(f"CFG:PINS:{pins_str}", dev_id)
-            print(f"[DBG CFG:PINS] SENT -> CFG:PINS:{pins_str} dev={dev_id}")
-            time.sleep(0.1)
-        else:
-            print(f"[DBG CFG:PINS] REJECTED for chip={_active_chip()} "
-                  f"(flash/reserved pin): {new_pins!r} - NOT sent, device left untouched")
+    # Button GPIOs are intentionally NOT sent here. Re-pinning is rare and
+    # dangerous (a wrong pin can reset the board), so the pin set is applied
+    # only through the explicit POST /api/sync_pins ("Save pins" in Settings),
+    # which validates against the connected chip. Normal config saves/syncs
+    # never carry CFG:PINS.
 
     # Check if key animations changed
     changed_anims = False

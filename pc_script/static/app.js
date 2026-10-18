@@ -25,13 +25,19 @@ let currentKey = null;
 // save to that specific BindDeck only.
 let currentDeviceId = '';
 
-// Build the /api/config URL, attaching the active deviceId so the server
-// stores/returns that deck's own config instead of the global one.
-function cfgPostUrl(force) {
+// Attach the active deviceId (and optional force) to an API URL so the server
+// scopes the request to that deck.
+function deviceUrl(path, force) {
     const q = [];
     if (force) q.push('force=1');
     if (currentDeviceId) q.push('deviceId=' + encodeURIComponent(currentDeviceId));
-    return '/api/config' + (q.length ? '?' + q.join('&') : '');
+    return path + (q.length ? '?' + q.join('&') : '');
+}
+
+// Build the /api/config URL, attaching the active deviceId so the server
+// stores/returns that deck's own config instead of the global one.
+function cfgPostUrl(force) {
+    return deviceUrl('/api/config', force);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -786,28 +792,41 @@ async function saveButtonPins() {
     const pins = readPinGrid();
     const valid = validatePins(pins);
     if (!valid) {
-        showPinsError('Invalid pin assignment: use 0-39, avoid reserved pins (4,5,18,19,21,22) and duplicates.');
+        const reserved = (ACTIVE_PROFILE.reserved || []).join(',');
+        showPinsError(`Invalid pin assignment for ${ACTIVE_PROFILE.deviceType || 'this chip'}: avoid reserved pins (${reserved}) and duplicates.`);
         return false;
     }
     clearPinsError();
     if (!config.esp32) config.esp32 = {};
     config.esp32.pins = valid;
+    const btn = document.getElementById('btn-pins-save');
+    const orig = btn ? btn.innerText : '';
+    if (btn) { btn.innerText = 'Applying...'; btn.disabled = true; }
     try {
-        // 1) persist to macro_config.json
+        // 1) Persist the choice. A normal config save never sends CFG:PINS.
         await fetch(cfgPostUrl(false), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(config)
         });
-        // 2) force-send CFG:PINS: regardless of diff (the diff check can
-        //    short-circuit when the config already had these pins on disk
-        //    but the device never received them — see /api/sync_pins).
-        await fetch('/api/sync_pins', { method: 'POST' });
-        const btn = document.getElementById('btn-pins-save');
-        if (btn) { const t = btn.innerText; btn.innerText = "Saved"; setTimeout(() => btn.innerText = t, 1500); }
+        // 2) Explicitly apply the pins - the ONLY path that sends CFG:PINS.
+        //    The server validates against the chip the device reports.
+        const res = await fetch(deviceUrl('/api/sync_pins'), { method: 'POST' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.success) {
+            showPinsError(data.error || 'Device rejected the pin set.');
+            if (btn) { btn.innerText = orig; btn.disabled = false; }
+            return false;
+        }
+        if (btn) {
+            btn.innerText = 'Applied';
+            setTimeout(() => { btn.innerText = orig; btn.disabled = false; }, 1500);
+        }
         return true;
     } catch (e) {
         console.error('saveButtonPins:', e);
+        if (btn) { btn.innerText = orig; btn.disabled = false; }
+        showPinsError('Failed to apply pins.');
         return false;
     }
 }
