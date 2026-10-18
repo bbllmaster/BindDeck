@@ -47,6 +47,10 @@ DEVICE_PREFIX = "BindDeck"
 SCAN_TIMEOUT = 8.0
 RECONNECT_DELAY = 3.0
 DISCOVER_INTERVAL = 5.0
+# A cached address that Windows reports as "not found" this many times in a
+# row is stale (e.g. the deck was cached under an old address); drop it instead
+# of retrying forever. A later scan re-adds the deck if it advertises again.
+MAX_NOT_FOUND = 5
 
 # bleak is imported lazily (see _load_bleak) rather than at module import time:
 # importing it once the app's own imports have all settled avoids ordering
@@ -117,6 +121,7 @@ class BleLink:
         self._loop = None
         self._queue = None
         self._connected = False
+        self._not_found = 0
         self._lock = threading.Lock()
 
     @property
@@ -389,6 +394,7 @@ class BleLinkManager:
                 link._queue = asyncio.Queue()
                 with link._lock:
                     link._connected = True
+                link._not_found = 0
                 print(f"[ble {tag}] connected {client.address} mtu={getattr(client, 'mtu_size', '?')}")
                 while client.is_connected:
                     try:
@@ -401,6 +407,16 @@ class BleLinkManager:
                         print(f"[ble {tag}] write error:", e)
             except Exception as e:  # noqa: BLE001
                 print(f"[ble {tag}] session error:", type(e).__name__, e)
+                if type(e).__name__ == "BleakDeviceNotFoundError":
+                    link._not_found += 1
+                    if link._not_found >= MAX_NOT_FOUND:
+                        # This cached address no longer resolves (stale cache /
+                        # deck advertising under another address). Stop
+                        # retrying; a scan will re-add it if it advertises.
+                        self._drop_link(link)
+                        return
+                else:
+                    link._not_found = 0
             finally:
                 with link._lock:
                     link._connected = False
@@ -411,6 +427,18 @@ class BleLinkManager:
                         pass
                 print(f"[ble {tag}] disconnected")
             await asyncio.sleep(RECONNECT_DELAY)
+
+    def _drop_link(self, link):
+        """Forget a stale address (link + cache) so we stop retrying it."""
+        with self._lock:
+            if self._links.get(link.address) is link:
+                self._links.pop(link.address, None)
+            if self._links_by_dev.get(link.dev_id) is link:
+                self._links_by_dev.pop(link.dev_id, None)
+            self._known.pop(link.address, None)
+        self._save_cache()
+        print(f"[ble {link.dev_id or link.address}] stale address {link.address} "
+              f"dropped after {MAX_NOT_FOUND} 'not found' errors")
 
     async def _subscribe(self, link, client):
         def _tx(_c, data: bytearray):
