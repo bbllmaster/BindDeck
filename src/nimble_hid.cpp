@@ -2,10 +2,20 @@
 
 #include <NimBLEDevice.h>
 #include <NimBLEHIDDevice.h>
+#include <Preferences.h>   // per-deck IRK persistence (WS-274)
 #include <esp_log.h>
+#include <esp_system.h>    // esp_fill_random()
 #include <cstdlib>
 #include <cstring>
 #include "ble_config.h"   // secondary GATT service for CFG/CMD over BLE
+
+// WS-274: NimBLE ships a hard-coded default IRK (ble_hs_pvcy_default_irk in
+// ble_hs_pvcy.c) and ble_hs_startup installs it when the app never sets one.
+// Windows resolves a bonded peer by IRK, so every deck looked like the SAME
+// identity and a second deck was folded into the first HID node. The setter is
+// declared in ble_hs_pvcy_priv.h / ble_hs_pvcy.h, neither of which is on the
+// public include path for sketches, so declare it here.
+extern "C" int ble_hs_pvcy_set_our_irk(const uint8_t *irk);
 
 // ---------------------------------------------------------------------------
 // HID report map: keyboard (report ID 1) + consumer control (report ID 2).
@@ -51,6 +61,39 @@ static const uint8_t ASCII_MAP[128] = {
 
 // --- connection state -------------------------------------------------------
 static volatile bool s_connected = false;
+
+// Return this deck's own 128-bit Identity Resolving Key, generating and
+// persisting one on first boot. Without this every deck handed the same
+// hard-coded NimBLE default IRK to the OS, which is what made Windows treat
+// two BindDecks as one device (WS-274).
+static void getOrCreateIrk(uint8_t irk[16]) {
+  Preferences p;
+  bool prefsOk = p.begin("binddeck", false);
+  bool valid = false;
+
+  if (prefsOk && p.getBytesLength("irk") == 16 && p.getBytes("irk", irk, 16) == 16) {
+    valid = true;
+    bool allZero = true;
+    for (int i = 0; i < 16; i++) {
+      if (irk[i]) { allZero = false; break; }
+    }
+    if (allZero) valid = false;
+  }
+
+  if (!valid) {
+    esp_fill_random(irk, 16);
+    bool allZero = true;
+    for (int i = 0; i < 16; i++) {
+      if (irk[i]) { allZero = false; break; }
+    }
+    if (allZero) irk[0] = 0x01;   // astronomically unlikely, but never hand out a zero IRK
+    if (prefsOk) {
+      p.putBytes("irk", irk, 16);
+    }
+  }
+
+  if (prefsOk) p.end();
+}
 
 class HidServerCB : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* s) override {
@@ -99,6 +142,17 @@ void BleKeyboard::setName(const char* name) {
 
 void BleKeyboard::begin() {
   NimBLEDevice::init(_name);
+
+  // WS-274: install this deck's unique IRK before the GATT server / pairing
+  // exists. init() only returns once the host has synced with the controller,
+  // so the HCI commands inside ble_hs_pvcy_set_our_irk() are safe to issue
+  // here. Keep sm_our_key_dist = ENC | ID (set in NimBLEDevice::init) so the
+  // unique IRK is actually distributed during pairing.
+  uint8_t irk[16];
+  getOrCreateIrk(irk);
+  int irkRc = ble_hs_pvcy_set_our_irk(irk);
+  ESP_LOGE("BIND", "[ble] IRK fp=%02X%02X set=%d", irk[0], irk[1], irkRc);
+
   NimBLEDevice::setMTU(517);                                      // room for long CFG lines
   NimBLEDevice::setPower(ESP_PWR_LVL_P9);                         // max TX power
   // Bonding + LEGACY pairing, no MITM: the C3 has no display/keypad, and
