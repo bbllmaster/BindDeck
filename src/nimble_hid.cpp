@@ -124,7 +124,16 @@ void BleKeyboard::begin() {
   NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
   adv->setAppearance(HID_KEYBOARD);
   adv->addServiceUUID(_hid->hidService()->getUUID());
+  // NimBLEDevice::init(_name) only sets the GAP Device Name (0x2A00) - it does
+  // NOT put the name in the advertising data. Without setName() every deck
+  // advertises as an anonymous HID device, Windows cannot tell a second deck
+  // from the first one and rejects it with "please try connecting the device
+  // again" (WS-272). NimBLE moves the name to the scan response if the
+  // advertising packet has no room left.
+  adv->setName(_name);
   adv->start();
+  ESP_LOGE("BIND", "[ble] advertising name=\"%s\" addr=%s", _name,
+           NimBLEDevice::getAddress().toString().c_str());
 }
 
 bool BleKeyboard::isConnected() { return s_connected; }
